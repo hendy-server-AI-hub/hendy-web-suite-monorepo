@@ -6,7 +6,7 @@ import {
   Volume2, WandSparkles, ZoomIn, ZoomOut,
 } from "lucide-react";
 import type { RenderManifest } from "@hendy/shared-types";
-import { getApiMeta, isApiConfigured, validateRenderManifest } from "./api";
+import { clearAccessToken, createProject, getAccessToken, getApiMeta, getCurrentUser, isApiConfigured, listAssets, login, saveProject, uploadAsset, validateRenderManifest } from "./api";
 
 type Clip = {
   id: number;
@@ -15,9 +15,10 @@ type Clip = {
   duration: number;
   color: "violet" | "blue" | "green" | "orange";
   track: number;
+  assetId?: string;
 };
 type AssetKind = "video" | "audio" | "subtitle" | "effect";
-type Asset = { icon: typeof FileVideo2; name: string; detail: string; kind: AssetKind };
+type Asset = { icon: typeof FileVideo2; name: string; detail: string; kind: AssetKind; cloudId?: string; mimeType?: string };
 type SavedProject = {
   version: 1;
   projectId: string;
@@ -119,7 +120,7 @@ function toManifest(projectId: string, clips: Clip[]): RenderManifest {
       kind,
       clips: clips.filter((clip) => clip.track === trackIndex).map((clip) => ({
         id: `clip-${clip.id}`,
-        assetId: clip.name,
+        assetId: clip.assetId || clip.name,
         start: clip.start,
         duration: clip.duration,
       })),
@@ -132,6 +133,15 @@ export default function App() {
   const [tab, setTab] = useState("Media");
   const [categoryFilter, setCategoryFilter] = useState("All");
   const [assetSearch, setAssetSearch] = useState("");
+  const [assets, setAssets] = useState<Asset[]>(sourceAssets);
+  const [apiToken, setApiToken] = useState(getAccessToken);
+  const [userEmail, setUserEmail] = useState("");
+  const [showAuth, setShowAuth] = useState(false);
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authBusy, setAuthBusy] = useState(false);
+  const [uploadBusy, setUploadBusy] = useState(false);
+  const [cloudProjectId, setCloudProjectId] = useState("");
   const [selectedAssetName, setSelectedAssetName] = useState(loadedProject?.selectedAssetName ?? sourceAssets[0].name);
   const [selectedClipId, setSelectedClipId] = useState<number | null>(loadedProject ? loadedProject.selectedClipId : 2);
   const [playing, setPlaying] = useState(false);
@@ -155,10 +165,11 @@ export default function App() {
   const [noticeId, setNoticeId] = useState(0);
   const rulerViewportRef = useRef<HTMLDivElement | null>(null);
   const timelineContentRef = useRef<HTMLDivElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const selectedClip = clips.find((clip) => clip.id === selectedClipId) ?? null;
   const time = useMemo(() => formatTimecode(playheadSeconds), [playheadSeconds]);
-  const visibleAssets = sourceAssets.filter((asset) => {
+  const visibleAssets = assets.filter((asset) => {
     const matchesTab = tab === "Media"
       || (tab === "Audio" && asset.kind === "audio")
       || (tab === "Text" && asset.kind === "subtitle")
@@ -239,6 +250,127 @@ export default function App() {
     showNotice(`Đã cắt “${selectedClip.name}” tại ${formatTimecode(splitAt)}.`, "success");
   }
 
+  async function submitLogin(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!isApiConfigured) {
+      showNotice("Chưa cấu hình VITE_API_BASE_URL. Sao chép apps/studio-web/.env.example thành .env.local và đặt URL Worker.", "warning");
+      return;
+    }
+    setAuthBusy(true);
+    try {
+      const session = await login(authEmail.trim(), authPassword);
+      setApiToken(session.token);
+      setUserEmail(session.user.email);
+      setAuthPassword("");
+      setShowAuth(false);
+      showNotice("Đăng nhập thành công: " + session.user.email, "success");
+    } catch (error) {
+      showNotice(error instanceof Error ? error.message : "Đăng nhập thất bại.", "error");
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  function signOut() {
+    clearAccessToken();
+    setApiToken("");
+    setUserEmail("");
+    setAssets(sourceAssets);
+    setCloudProjectId("");
+    showNotice("Đã đăng xuất API.", "info");
+  }
+
+  async function handleFilesSelected(event: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.currentTarget.files || []);
+    event.currentTarget.value = "";
+    if (!files.length) return;
+    if (!apiToken) {
+      setShowAuth(true);
+      showNotice("Đăng nhập trước khi upload tài nguyên lên cloud.", "warning");
+      return;
+    }
+    setUploadBusy(true);
+    let uploadedCount = 0;
+    try {
+      for (const file of files) {
+        const result = await uploadAsset(file);
+        const mime = result.asset.mime_type.toLowerCase();
+        const kind: AssetKind = mime.startsWith("video/") ? "video" : mime.startsWith("audio/") ? "audio" : (mime.startsWith("text/") || mime.includes("subrip")) ? "subtitle" : "image";
+        const Icon = kind === "audio" ? Music2 : kind === "subtitle" ? Subtitles : FileVideo2;
+        const size = result.asset.size_bytes >= 1024 * 1024 ? (result.asset.size_bytes / (1024 * 1024)).toFixed(1) + " MB" : Math.max(1, Math.round(result.asset.size_bytes / 1024)) + " KB";
+        const asset: Asset = { icon: Icon, name: result.asset.name, detail: size + " · cloud", kind, cloudId: result.asset.id, mimeType: mime };
+        setAssets((current) => [asset, ...current.filter((item) => item.cloudId !== asset.cloudId)]);
+        setSelectedAssetName(asset.name);
+        uploadedCount++;
+      }
+      showNotice("Đã upload " + uploadedCount + " tài nguyên lên R2.", "success");
+    } catch (error) {
+      showNotice((error instanceof Error ? error.message : "Upload thất bại.") + (uploadedCount ? " Đã upload thành công " + uploadedCount + " file trước đó." : ""), "error");
+    } finally {
+      setUploadBusy(false);
+    }
+  }
+
+  function addSelectedAssetToTimeline() {
+    const asset = assets.find((item) => item.name === selectedAssetName);
+    if (!asset) {
+      showNotice("Chọn một tài nguyên trước.", "warning");
+      return;
+    }
+    if (!asset.cloudId) {
+      showNotice("Đây là tài nguyên minh họa. Upload file thật lên R2 rồi chọn tài nguyên cloud để dùng trong timeline.", "warning");
+      return;
+    }
+    const track = asset.kind === "audio" ? 2 : asset.kind === "subtitle" ? 1 : selectedClip?.track ?? 0;
+    const color: Clip["color"] = asset.kind === "audio" ? "orange" : asset.kind === "subtitle" ? "green" : "blue";
+    if (selectedClip) {
+      commitClips(clips.map((clip) => clip.id === selectedClip.id ? { ...clip, name: asset.name, assetId: asset.cloudId, color } : clip));
+      showNotice("Đã thay media clip đang chọn bằng tài nguyên cloud.", "success");
+      return;
+    }
+    const nextId = Math.max(0, ...clips.map((clip) => clip.id)) + 1;
+    const duration = asset.kind === "subtitle" || asset.kind === "audio" ? Math.max(1, PROJECT_DURATION - playheadSeconds) : Math.min(10, Math.max(1, PROJECT_DURATION - playheadSeconds));
+    commitClips([...clips, { id: nextId, name: asset.name, assetId: asset.cloudId, start: playheadSeconds, duration, color, track }]);
+    setSelectedClipId(nextId);
+    showNotice("Đã thêm tài nguyên cloud vào timeline.", "success");
+  }
+
+  async function saveTimelineToCloud() {
+    if (!isApiConfigured) {
+      showNotice("Chưa cấu hình API URL.", "warning");
+      return;
+    }
+    if (!apiToken) {
+      setShowAuth(true);
+      showNotice("Đăng nhập để lưu dự án lên cloud.", "warning");
+      return;
+    }
+    setSaveStatus("Đang đồng bộ…");
+    try {
+      let targetId = cloudProjectId;
+      if (!targetId) {
+        const created = await createProject(timelineName);
+        targetId = created.project.id;
+        setCloudProjectId(targetId);
+      }
+      const missingMedia = clips.filter((clip) => !clip.assetId);
+      if (missingMedia.length) {
+        await saveProject(targetId, { name: timelineName });
+        setSaveStatus("Đã lưu tên dự án cloud");
+        showNotice("Đã lưu tên dự án lên cloud. Timeline chưa đồng bộ vì còn " + missingMedia.length + " clip minh họa chưa gắn file R2; chọn từng clip, chọn file cloud và bấm + để thay media.", "warning");
+        return;
+      }
+      const manifest = toManifest(targetId, clips);
+      await validateRenderManifest(manifest);
+      await saveProject(targetId, { name: timelineName, manifest });
+      setSaveStatus("Đã đồng bộ cloud");
+      showNotice("Đã lưu dự án và manifest lên D1.", "success");
+    } catch (error) {
+      setSaveStatus("Lỗi đồng bộ");
+      showNotice(error instanceof Error ? error.message : "Không thể đồng bộ dự án lên cloud.", "error");
+    }
+  }
+
   async function checkManifestWithApi() {
     if (!isApiConfigured) {
       showNotice("API chưa được cấu hình. Bản nháp vẫn tự lưu trong trình duyệt; hãy đặt VITE_API_BASE_URL để kiểm tra manifest qua Worker.", "warning");
@@ -254,6 +386,30 @@ export default function App() {
       showNotice(error instanceof Error ? error.message : "Không thể kiểm tra manifest qua API.", "error");
     }
   }
+
+  useEffect(() => {
+    if (!isApiConfigured || !apiToken) return;
+    let active = true;
+    Promise.all([getCurrentUser(), listAssets()]).then(([session, response]) => {
+      if (!active) return;
+      setUserEmail(session.user.email);
+      const cloudAssets: Asset[] = response.assets.map((asset) => {
+        const mime = asset.mime_type.toLowerCase();
+        const kind: AssetKind = mime.startsWith("video/") ? "video" : mime.startsWith("audio/") ? "audio" : (mime.startsWith("text/") || mime.includes("subrip")) ? "subtitle" : "image";
+        const Icon = kind === "audio" ? Music2 : kind === "subtitle" ? Subtitles : FileVideo2;
+        const size = asset.size_bytes >= 1024 * 1024 ? (asset.size_bytes / (1024 * 1024)).toFixed(1) + " MB" : Math.max(1, Math.round(asset.size_bytes / 1024)) + " KB";
+        return { icon: Icon, name: asset.name, detail: size + " · cloud", kind, cloudId: asset.id, mimeType: mime };
+      });
+      setAssets((current) => [...cloudAssets, ...sourceAssets.filter((sample) => !cloudAssets.some((remote) => remote.name === sample.name))]);
+    }).catch(() => {
+      if (!active) return;
+      clearAccessToken();
+      setApiToken("");
+      setUserEmail("");
+      showNotice("Phiên API đã hết hạn. Hãy đăng nhập lại.", "warning");
+    });
+    return () => { active = false; };
+  }, [apiToken]);
 
   useEffect(() => {
     if (!isApiConfigured) {
@@ -349,22 +505,23 @@ export default function App() {
       <button className="tool-btn" title="Undo" onClick={undo} disabled={!undoStack.length}><Undo2 size={16}/></button>
       <button className="tool-btn" title="Redo" onClick={redo} disabled={!redoStack.length}><Redo2 size={16}/></button>
       <button className="tool-btn help-btn" title="Trợ giúp" onClick={() => showNotice("Mẹo: chọn clip, đặt playhead bên trong clip rồi dùng nút kéo để tách. Dùng Ctrl+Z để hoàn tác, Ctrl+Y hoặc Ctrl+Shift+Z để làm lại.", "info")}><CircleHelp size={16}/></button>
-      <button className="cloud-btn" onClick={checkManifestWithApi}><CloudUpload size={15}/> Kiểm tra API</button>
+      <button className="cloud-btn" onClick={apiToken ? saveTimelineToCloud : checkManifestWithApi}><CloudUpload size={15}/> {apiToken ? "Lưu cloud" : "Kiểm tra API"}</button>
       <button className="export-btn" onClick={() => showNotice("Xuất MP4 chưa khả dụng: cần tích hợp render worker/FFmpeg và kho lưu trữ. Chưa có video nào được tạo.", "warning")}><Sparkles size={15}/> Xuất video</button>
-      <div className="user-puck">GD</div>
+      <button className="user-puck user-puck-button" title={apiToken ? "Đã đăng nhập: " + userEmail : "Đăng nhập API"} onClick={() => setShowAuth(true)}>{apiToken ? "✓" : "GD"}</button>
     </header>
 
     <div className="studio-workspace">
       <aside className="asset-sidebar">
         <div className="side-tabs">{[{label:"Media",icon:Film},{label:"Audio",icon:AudioLines},{label:"Text",icon:Subtitles},{label:"Effects",icon:WandSparkles}].map(({label,icon:Icon})=><button key={label} className={tab===label?"current":""} onClick={()=>{setTab(label);setCategoryFilter("All");}}><Icon size={17}/><span>{label}</span></button>)}</div>
-        <div className="asset-head"><div><b>{tab === "Media"?"Thư viện media":tab === "Audio"?"Thư viện âm thanh":tab === "Text"?"Phụ đề & văn bản":"Hiệu ứng"}</b><small>Project assets</small></div><button title="Thêm tài nguyên" onClick={() => showNotice("Chưa có asset upload API. Thư viện hiện chứa tài nguyên mẫu, không phải file video thật.", "warning")}><Plus size={16}/></button></div>
-        <button className="import-drop" onClick={() => showNotice("Chức năng nhập file chưa được kết nối. Cần bổ sung upload endpoint và lưu trữ R2 để quản lý media thật.", "warning")}><CloudUpload size={20}/><b>Nhập tài nguyên</b><span>Kéo thả hoặc chọn file</span></button>
+        <div className="asset-head"><div><b>{tab === "Media"?"Thư viện media":tab === "Audio"?"Thư viện âm thanh":tab === "Text"?"Phụ đề & văn bản":"Hiệu ứng"}</b><small>{apiToken ? "Cloud assets · " + userEmail : "Project assets"}</small></div><button title="Thêm tài nguyên đã chọn vào timeline (hoặc thay clip đang chọn)" onClick={addSelectedAssetToTimeline}><Plus size={16}/></button></div>
+        <button className="import-drop" onClick={() => { if (!apiToken) { setShowAuth(true); return; } fileInputRef.current?.click(); }} disabled={uploadBusy}><CloudUpload size={20}/><b>{uploadBusy ? "Đang upload…" : "Nhập tài nguyên"}</b><span>{apiToken ? "Tải file lên R2 · tối đa 20 MB/file" : "Đăng nhập để upload lên cloud"}</span></button>
+        <input ref={fileInputRef} className="file-picker-hidden" type="file" multiple accept="video/mp4,video/webm,video/quicktime,audio/mpeg,audio/mp4,audio/wav,audio/ogg,text/vtt,.srt,.vtt,image/jpeg,image/png,image/webp" onChange={handleFilesSelected} />
         <div className="asset-search"><span>⌕</span><input aria-label="Tìm trong thư viện" value={assetSearch} onChange={(event)=>setAssetSearch(event.target.value)} placeholder="Tìm trong thư viện"/></div>
         <div className="asset-categories">
-          <button className={categoryFilter==="All"?"chosen":""} onClick={()=>setCategoryFilter("All")}><FolderOpen size={13}/> Tất cả <span>{sourceAssets.length}</span></button>
-          <button className={categoryFilter==="Video"?"chosen":""} onClick={()=>setCategoryFilter("Video")}><Film size={13}/> Video <span>{sourceAssets.filter((asset)=>asset.kind==="video").length}</span></button>
-          <button className={categoryFilter==="Audio"?"chosen":""} onClick={()=>setCategoryFilter("Audio")}><Music2 size={13}/> Âm thanh <span>{sourceAssets.filter((asset)=>asset.kind==="audio").length}</span></button>
-          <button className={categoryFilter==="Text"?"chosen":""} onClick={()=>setCategoryFilter("Text")}><Subtitles size={13}/> Phụ đề <span>{sourceAssets.filter((asset)=>asset.kind==="subtitle").length}</span></button>
+          <button className={categoryFilter==="All"?"chosen":""} onClick={()=>setCategoryFilter("All")}><FolderOpen size={13}/> Tất cả <span>{assets.length}</span></button>
+          <button className={categoryFilter==="Video"?"chosen":""} onClick={()=>setCategoryFilter("Video")}><Film size={13}/> Video <span>{assets.filter((asset)=>asset.kind==="video").length}</span></button>
+          <button className={categoryFilter==="Audio"?"chosen":""} onClick={()=>setCategoryFilter("Audio")}><Music2 size={13}/> Âm thanh <span>{assets.filter((asset)=>asset.kind==="audio").length}</span></button>
+          <button className={categoryFilter==="Text"?"chosen":""} onClick={()=>setCategoryFilter("Text")}><Subtitles size={13}/> Phụ đề <span>{assets.filter((asset)=>asset.kind==="subtitle").length}</span></button>
         </div>
         <div className="asset-list">
           {visibleAssets.map(({icon:Icon,name,detail},i)=><button key={name} className={`asset-item ${selectedAssetName===name?"asset-selected":""}`} onClick={()=>setSelectedAssetName(name)}><div className={`asset-thumb thumb-${i}`}><Icon size={19}/>{name.endsWith(".mp4")&&<span className="thumb-play"><Play size={9} fill="currentColor"/></span>}</div><span className="asset-description"><b>{name}</b><small>{detail}</small></span><MoreHorizontal size={15}/></button>)}
