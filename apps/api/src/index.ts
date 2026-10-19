@@ -4,17 +4,23 @@ interface D1Result<T = unknown> { success: boolean; results?: T[]; meta?: { chan
 interface D1Statement { bind(...values: unknown[]): D1Statement; first<T = Record<string, unknown>>(): Promise<T | null>; all<T = Record<string, unknown>>(): Promise<D1Result<T>>; run(): Promise<D1Result>; }
 interface D1Database { prepare(query: string): D1Statement; }
 interface StoredObject { body: ReadableStream<Uint8Array>; httpEtag?: string; writeHttpMetadata(headers: Headers): void; }
-interface R2Bucket { put(key: string, value: ArrayBuffer, options?: { httpMetadata?: { contentType?: string }; customMetadata?: Record<string, string> }): Promise<{ etag?: string }>; get(key: string): Promise<StoredObject | null>; delete(key: string): Promise<void>; }
-interface Env { APP_NAME?: string; APP_VERSION?: string; APP_ENV?: string; CORS_ORIGIN?: string; AUTH_JWT_SECRET?: string; BOOTSTRAP_ADMIN_KEY?: string; DB?: D1Database; ASSETS?: R2Bucket; }
+interface R2Bucket { put(key: string, value: ArrayBuffer | ReadableStream<Uint8Array>, options?: { httpMetadata?: { contentType?: string }; customMetadata?: Record<string, string> }): Promise<{ etag?: string }>; get(key: string): Promise<StoredObject | null>; delete(key: string): Promise<void>; }
+interface Env { APP_NAME?: string; APP_VERSION?: string; APP_ENV?: string; CORS_ORIGIN?: string; AUTH_JWT_SECRET?: string; BOOTSTRAP_ADMIN_KEY?: string; RENDER_SERVICE_TOKEN?: string; DB?: D1Database; ASSETS?: R2Bucket; }
 interface UserRow { id: string; email: string; role: AppRole; status: string; password_salt?: string; password_hash?: string; }
 interface ProjectRow { id: string; owner_id: string; name: string; status: ProjectStatus; manifest_json: string | null; created_at: string; updated_at: string; }
 interface AssetRow { id: string; owner_id: string; name: string; mime_type: string; size_bytes: number; r2_key: string; created_at: string; }
+interface RenderJobRow { id: string; owner_id: string; project_id: string; status: string; progress: number; output_key: string | null; output_size_bytes?: number | null; error_code: string | null; error_message: string | null; attempts: number; lease_until?: number | null; worker_id?: string | null; created_at: string; updated_at: string; started_at?: string | null; finished_at?: string | null; project_name?: string; manifest_json?: string | null; }
 interface Claims { sub: string; email: string; role: AppRole; iat: number; exp: number; }
 
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8", "x-content-type-options": "nosniff", "cache-control": "no-store" };
 const TOKEN_TTL_SECONDS = 8 * 60 * 60;
 const MAX_JSON_BYTES = 1_048_576;
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
+const MAX_RENDER_OUTPUT_BYTES = 80 * 1024 * 1024;
+const MAX_RENDER_CLIPS = 120;
+const MAX_RENDER_DURATION_SECONDS = 1800;
+const MAX_RENDER_ATTEMPTS = 3;
+const RENDER_LEASE_SECONDS = 600;
 const PBKDF2_ITERATIONS = 150_000;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -127,11 +133,225 @@ async function route(request: Request, env: Env, requestId: string, headers: Rec
     return json({ token: session.token, tokenType: "Bearer", expiresAt: session.expiresAt, user: { id: user.id, email: user.email, role: user.role } }, 200, headers);
   }
 
-  if (path.startsWith("/api/v1/projects") || path.startsWith("/api/v1/assets") || path === "/api/v1/auth/me") {
+  if (method === "POST" && path === "/api/v1/render/validate") {
+    const parsed = await readJson(request);
+    if ("error" in parsed) return fail("INVALID_JSON", parsed.error, requestId, parsed.status, headers);
+    const checked = validateManifest(parsed.value);
+    if (!checked.valid) return fail("INVALID_MANIFEST", checked.reason, requestId, 422, headers);
+    return json({
+      valid: true,
+      projectId: checked.manifest.projectId,
+      trackCount: checked.manifest.tracks.length,
+      clipCount: checked.manifest.tracks.reduce((total, track) => total + track.clips.length, 0),
+      note: "Manifest structure is valid. Render only starts through POST /api/v1/render/jobs.",
+    }, 200, headers);
+  }
+
+  if (path.startsWith("/internal/render/")) {
+    if (!env.RENDER_SERVICE_TOKEN) return fail("RENDER_SERVICE_NOT_CONFIGURED", "RENDER_SERVICE_TOKEN chưa được cấu hình.", requestId, 503, headers);
+    const authorization = request.headers.get("authorization") || "";
+    const tokenMatch = authorization.match(/^Bearer\s+(.+)$/i);
+    if (!tokenMatch || !equalConstantTime(tokenMatch[1], env.RENDER_SERVICE_TOKEN)) return fail("RENDER_SERVICE_UNAUTHORIZED", "Render service token không hợp lệ.", requestId, 401, headers);
+    if (!env.DB) return fail("DATABASE_NOT_CONFIGURED", "D1 chưa được khai báo.", requestId, 503, headers);
+    const workerId = request.headers.get("x-render-worker-id") || "";
+    if (!/^[A-Za-z0-9._-]{1,80}$/.test(workerId)) return fail("INVALID_RENDER_WORKER", "Thiếu hoặc sai x-render-worker-id.", requestId, 400, headers);
+
+    if (method === "GET" && path === "/internal/render/jobs/next") {
+      if (!env.ASSETS) return fail("OBJECT_STORAGE_NOT_CONFIGURED", "R2 chưa được khai báo.", requestId, 503, headers);
+      const now = Math.floor(Date.now() / 1000);
+      const nowIso = new Date().toISOString();
+      await env.DB.prepare("UPDATE render_jobs SET status='failed',error_code='WORKER_TIMEOUT',error_message='Render worker lease expired too many times.',lease_until=NULL,worker_id=NULL,finished_at=?,updated_at=? WHERE status='processing' AND lease_until <= ? AND attempts >= ?")
+        .bind(nowIso, nowIso, now, MAX_RENDER_ATTEMPTS).run();
+      const candidate = await env.DB.prepare("SELECT r.id,r.owner_id,r.project_id,r.status,r.attempts,r.lease_until,p.manifest_json,p.name AS project_name FROM render_jobs r JOIN projects p ON p.id=r.project_id WHERE p.manifest_json IS NOT NULL AND r.attempts < ? AND (r.status='queued' OR (r.status='processing' AND r.lease_until <= ?)) ORDER BY r.created_at ASC LIMIT 1")
+        .bind(MAX_RENDER_ATTEMPTS, now).first<RenderJobRow>();
+      if (!candidate) return json({ job: null, pollAfterMs: 2000 }, 200, headers);
+      const updated = await env.DB.prepare("UPDATE render_jobs SET status='processing',progress=1,attempts=attempts+1,worker_id=?,lease_until=?,started_at=COALESCE(started_at,?),updated_at=? WHERE id=? AND attempts < ? AND (status='queued' OR (status='processing' AND lease_until <= ?))")
+        .bind(workerId, now + RENDER_LEASE_SECONDS, nowIso, nowIso, candidate.id, MAX_RENDER_ATTEMPTS, now).run();
+      if ((updated.meta?.changes || 0) !== 1) return json({ job: null, pollAfterMs: 1000 }, 200, headers);
+      const manifestJson = candidate.manifest_json;
+      if (!manifestJson) {
+        await env.DB.prepare("UPDATE render_jobs SET status='failed',error_code='MISSING_MANIFEST',error_message='Project manifest is empty.',finished_at=?,updated_at=?,lease_until=NULL,worker_id=NULL WHERE id=? AND worker_id=?")
+          .bind(nowIso, nowIso, candidate.id, workerId).run();
+        return json({ job: null, pollAfterMs: 250 }, 200, headers);
+      }
+      let manifest: RenderManifest;
+      try { manifest = JSON.parse(manifestJson) as RenderManifest; }
+      catch {
+        await env.DB.prepare("UPDATE render_jobs SET status='failed',error_code='INVALID_MANIFEST_JSON',error_message='Stored project manifest is not valid JSON.',finished_at=?,updated_at=?,lease_until=NULL,worker_id=NULL WHERE id=? AND worker_id=?")
+          .bind(nowIso, nowIso, candidate.id, workerId).run();
+        return json({ job: null, pollAfterMs: 250 }, 200, headers);
+      }
+      return json({ job: { id: candidate.id, projectId: candidate.project_id, projectName: candidate.project_name, attempt: (candidate.attempts || 0) + 1, manifest } }, 200, headers);
+    }
+
+    const assetMatch = path.match(/^\/internal\/render\/assets\/([0-9a-f-]{36})$/i);
+    if (assetMatch && method === "GET") {
+      const jobId = url.searchParams.get("jobId") || "";
+      const job = await env.DB.prepare("SELECT id,owner_id,status,worker_id FROM render_jobs WHERE id=? LIMIT 1").bind(jobId).first<RenderJobRow>();
+      if (!job || job.status !== "processing" || job.worker_id !== workerId) return fail("RENDER_JOB_LEASE_INVALID", "Render job lease không hợp lệ hoặc đã hết hạn.", requestId, 409, headers);
+      const asset = await env.DB.prepare("SELECT id,owner_id,name,mime_type,size_bytes,r2_key,created_at FROM assets WHERE id=? AND owner_id=? LIMIT 1")
+        .bind(assetMatch[1], job.owner_id).first<AssetRow>();
+      if (!asset) return fail("ASSET_NOT_FOUND", "Tài nguyên không thuộc project owner.", requestId, 404, headers);
+      if (!env.ASSETS) return fail("OBJECT_STORAGE_NOT_CONFIGURED", "R2 chưa được khai báo.", requestId, 503, headers);
+      const object = await env.ASSETS.get(asset.r2_key);
+      if (!object) return fail("ASSET_OBJECT_MISSING", "File tài nguyên không còn trong R2.", requestId, 404, headers);
+      const assetHeaders = new Headers(headers);
+      object.writeHttpMetadata(assetHeaders);
+      assetHeaders.set("content-type", asset.mime_type);
+      assetHeaders.set("content-disposition", "inline; filename*=UTF-8''" + encodeURIComponent(asset.name));
+      assetHeaders.set("x-asset-name", encodeURIComponent(asset.name));
+      assetHeaders.set("cache-control", "private, no-store");
+      if (object.httpEtag) assetHeaders.set("etag", object.httpEtag);
+      return new Response(object.body, { status: 200, headers: assetHeaders });
+    }
+
+    const jobMatch = path.match(/^\/internal\/render\/jobs\/([0-9a-f-]{36})(?:\/(progress|output|fail))?$/i);
+    if (jobMatch) {
+      const jobId = jobMatch[1];
+      const action = jobMatch[2] || "";
+      const job = await env.DB.prepare("SELECT id,owner_id,project_id,status,progress,output_key,attempts,worker_id FROM render_jobs WHERE id=? LIMIT 1").bind(jobId).first<RenderJobRow>();
+      if (!job || job.status !== "processing" || job.worker_id !== workerId) return fail("RENDER_JOB_LEASE_INVALID", "Render job lease không hợp lệ hoặc đã hết hạn.", requestId, 409, headers);
+
+      if (action === "progress" && method === "POST") {
+        const parsed = await readJson(request);
+        if ("error" in parsed) return fail("INVALID_JSON", parsed.error, requestId, parsed.status, headers);
+        const body = asRecord(parsed.value);
+        const progress = body?.progress;
+        if (typeof progress !== "number" || !Number.isInteger(progress) || progress < 1 || progress > 99) return fail("INVALID_PROGRESS", "progress phải là số nguyên từ 1 đến 99.", requestId, 422, headers);
+        const now = Math.floor(Date.now() / 1000);
+        const updated = await env.DB.prepare("UPDATE render_jobs SET progress=?,lease_until=?,updated_at=? WHERE id=? AND status='processing' AND worker_id=?")
+          .bind(progress, now + RENDER_LEASE_SECONDS, new Date().toISOString(), jobId, workerId).run();
+        if ((updated.meta?.changes || 0) !== 1) return fail("RENDER_JOB_LEASE_INVALID", "Render job lease đã hết hạn.", requestId, 409, headers);
+        return json({ updated: true, progress }, 200, headers);
+      }
+
+      if (action === "fail" && method === "POST") {
+        const parsed = await readJson(request);
+        if ("error" in parsed) return fail("INVALID_JSON", parsed.error, requestId, parsed.status, headers);
+        const body = asRecord(parsed.value);
+        const code = typeof body?.code === "string" && /^[A-Z0-9_]{1,64}$/.test(body.code) ? body.code : "RENDER_FAILED";
+        const message = typeof body?.message === "string" && body.message.trim() ? body.message.trim().slice(0, 300) : "Render worker reported a failure.";
+        const retry = job.attempts < MAX_RENDER_ATTEMPTS;
+        const nowIso = new Date().toISOString();
+        await env.DB.prepare("UPDATE render_jobs SET status=?,progress=CASE WHEN ?='queued' THEN 0 ELSE progress END,error_code=?,error_message=?,lease_until=NULL,worker_id=NULL,finished_at=CASE WHEN ?='failed' THEN ? ELSE NULL END,updated_at=? WHERE id=? AND status='processing' AND worker_id=?")
+          .bind(retry ? "queued" : "failed", retry ? "queued" : "failed", code, message, retry ? "queued" : "failed", nowIso, nowIso, jobId, workerId).run();
+        return json({ accepted: true, retrying: retry, attempt: job.attempts }, 200, headers);
+      }
+
+      if (action === "output" && (method === "PUT" || method === "POST")) {
+        if (!env.ASSETS) return fail("OBJECT_STORAGE_NOT_CONFIGURED", "R2 chưa được khai báo.", requestId, 503, headers);
+        const contentLength = Number(request.headers.get("content-length") || "0");
+        if (!Number.isFinite(contentLength) || contentLength <= 0) return fail("CONTENT_LENGTH_REQUIRED", "Render worker phải gửi Content-Length cho MP4.", requestId, 411, headers);
+        if (contentLength > MAX_RENDER_OUTPUT_BYTES) return fail("RENDER_OUTPUT_TOO_LARGE", "Giới hạn MP4 output qua API hiện tại là 80 MiB; cấu hình direct-to-R2 cho output lớn hơn.", requestId, 413, headers);
+        if (!(request.headers.get("content-type") || "").toLowerCase().startsWith("video/mp4") || !request.body) return fail("INVALID_RENDER_OUTPUT", "Output phải là stream video/mp4.", requestId, 415, headers);
+        const key = "renders/" + job.owner_id + "/" + jobId + ".mp4";
+        try {
+          await env.ASSETS.put(key, request.body, { httpMetadata: { contentType: "video/mp4" }, customMetadata: { ownerId: job.owner_id, jobId, contentType: "video/mp4" } });
+          const nowIso = new Date().toISOString();
+          const updated = await env.DB.prepare("UPDATE render_jobs SET status='completed',progress=100,output_key=?,output_size_bytes=?,error_code=NULL,error_message=NULL,lease_until=NULL,worker_id=NULL,finished_at=?,updated_at=? WHERE id=? AND status='processing' AND worker_id=?")
+            .bind(key, contentLength, nowIso, nowIso, jobId, workerId).run();
+          if ((updated.meta?.changes || 0) !== 1) {
+            await env.ASSETS.delete(key).catch(() => undefined);
+            return fail("RENDER_JOB_LEASE_INVALID", "Render job lease đã hết hạn trước khi hoàn tất upload.", requestId, 409, headers);
+          }
+          return json({ completed: true, jobId, outputSizeBytes: contentLength }, 200, headers);
+        } catch (error) {
+          await env.ASSETS.delete(key).catch(() => undefined);
+          console.error(JSON.stringify({ event: "render_output_upload_failed", requestId, jobId, error: error instanceof Error ? error.message : "unknown" }));
+          return fail("RENDER_OUTPUT_UPLOAD_FAILED", "Không thể lưu MP4 vào R2.", requestId, 500, headers);
+        }
+      }
+      return fail("NOT_FOUND", "Không tìm thấy internal render endpoint.", requestId, 404, headers);
+    }
+    return fail("NOT_FOUND", "Không tìm thấy internal render endpoint.", requestId, 404, headers);
+  }
+
+  if (path.startsWith("/api/v1/projects") || path.startsWith("/api/v1/assets") || path.startsWith("/api/v1/render/jobs") || path === "/api/v1/auth/me") {
     if (!env.DB) return fail("DATABASE_NOT_CONFIGURED", "D1 chưa được khai báo. Chạy npm run bootstrap:production.", requestId, 503, headers);
     if (!env.AUTH_JWT_SECRET) return fail("AUTH_NOT_CONFIGURED", "AUTH_JWT_SECRET chưa được khai báo.", requestId, 503, headers);
     const user = await authenticate(request, env); if (!user) return fail("UNAUTHENTICATED", "Phiên đăng nhập không hợp lệ hoặc đã hết hạn.", requestId, 401, headers);
     if (path === "/api/v1/auth/me" && method === "GET") return json({ user: { id: user.sub, email: user.email, role: user.role }, expiresAt: new Date(user.exp * 1000).toISOString() }, 200, headers);
+
+
+    if (path === "/api/v1/render/jobs" && method === "POST") {
+      if (!env.ASSETS || !env.RENDER_SERVICE_TOKEN) return fail("RENDER_NOT_CONFIGURED", "R2 hoặc render service token chưa được khai báo.", requestId, 503, headers);
+      if (user.role === "viewer") return fail("ROLE_FORBIDDEN", "Tài khoản viewer không được tạo render.", requestId, 403, headers);
+      const parsed = await readJson(request);
+      if ("error" in parsed) return fail("INVALID_JSON", parsed.error, requestId, parsed.status, headers);
+      const body = asRecord(parsed.value);
+      const projectId = typeof body?.projectId === "string" ? body.projectId : "";
+      if (!/^[0-9a-f-]{36}$/i.test(projectId)) return fail("INVALID_PROJECT_ID", "projectId phải là UUID của dự án cloud.", requestId, 422, headers);
+      const project = await env.DB.prepare("SELECT id,owner_id,name,status,manifest_json,created_at,updated_at FROM projects WHERE id=? AND owner_id=? LIMIT 1")
+        .bind(projectId, user.sub).first<ProjectRow>();
+      if (!project) return fail("PROJECT_NOT_FOUND", "Không tìm thấy dự án hoặc bạn không có quyền.", requestId, 404, headers);
+      if (!project.manifest_json) return fail("MANIFEST_REQUIRED", "Hãy lưu manifest của dự án lên cloud trước khi render.", requestId, 422, headers);
+      let rawManifest: unknown;
+      try { rawManifest = JSON.parse(project.manifest_json) as unknown; } catch { return fail("INVALID_MANIFEST_JSON", "Manifest đã lưu không phải JSON hợp lệ.", requestId, 422, headers); }
+      const checked = validateManifest(rawManifest);
+      if (!checked.valid) return fail("INVALID_MANIFEST", checked.reason, requestId, 422, headers);
+      if (checked.manifest.projectId !== projectId) return fail("PROJECT_ID_MISMATCH", "Manifest projectId không khớp ID cloud.", requestId, 422, headers);
+      const clipList = checked.manifest.tracks.flatMap((track) => track.clips.map((clip) => ({ ...clip, kind: track.kind })));
+      if (!clipList.length || clipList.length > MAX_RENDER_CLIPS) return fail("RENDER_CLIP_LIMIT", "Render cần từ 1 đến " + MAX_RENDER_CLIPS + " clip.", requestId, 422, headers);
+      const totalDuration = Math.max(0, ...clipList.map((clip) => clip.start + clip.duration));
+      if (totalDuration <= 0 || totalDuration > MAX_RENDER_DURATION_SECONDS) return fail("RENDER_DURATION_LIMIT", "Thời lượng render tối đa là 30 phút.", requestId, 422, headers);
+      if (checked.manifest.output.width > 3840 || checked.manifest.output.height > 2160 || checked.manifest.output.fps > 60) return fail("RENDER_SPEC_LIMIT", "Render API giới hạn ở 4K/60 FPS để bảo vệ tài nguyên.", requestId, 422, headers);
+      const assetIds = [...new Set(clipList.map((clip) => clip.assetId))];
+      const placeholders = assetIds.map(() => "?").join(",");
+      const rows = await env.DB.prepare("SELECT id FROM assets WHERE owner_id=? AND id IN (" + placeholders + ")").bind(user.sub, ...assetIds).all<{ id: string }>();
+      const owned = new Set((rows.results || []).map((asset) => asset.id));
+      if (assetIds.some((assetId) => !owned.has(assetId))) return fail("ASSET_ACCESS_DENIED", "Tất cả clip phải trỏ tới tài nguyên R2 thuộc tài khoản này.", requestId, 422, headers);
+      const jobId = newId();
+      await env.DB.prepare("INSERT INTO render_jobs (id,owner_id,project_id,status,progress,attempts) VALUES (?,?,?,'queued',0,0)")
+        .bind(jobId, user.sub, projectId).run();
+      const job = await env.DB.prepare("SELECT id,project_id,status,progress,attempts,created_at,updated_at FROM render_jobs WHERE id=? AND owner_id=?")
+        .bind(jobId, user.sub).first<RenderJobRow>();
+      return json({ job: { ...job, projectName: project.name, downloadUrl: null }, message: "Render job đã được đưa vào hàng đợi. Worker FFmpeg sẽ xử lý khi sẵn sàng." }, 202, headers);
+    }
+    if (path === "/api/v1/render/jobs" && method === "GET") {
+      const result = await env.DB.prepare("SELECT r.id,r.project_id,r.status,r.progress,r.output_key,r.output_size_bytes,r.error_code,r.error_message,r.attempts,r.created_at,r.updated_at,r.finished_at,p.name AS project_name FROM render_jobs r JOIN projects p ON p.id=r.project_id WHERE r.owner_id=? ORDER BY r.created_at DESC LIMIT 100")
+        .bind(user.sub).all<RenderJobRow>();
+      return json({ jobs: (result.results || []).map((job) => ({
+        id: job.id, projectId: job.project_id, projectName: job.project_name, status: job.status, progress: job.progress,
+        attempts: job.attempts, outputSizeBytes: job.output_size_bytes ?? null, errorCode: job.error_code, errorMessage: job.error_message,
+        createdAt: job.created_at, updatedAt: job.updated_at, finishedAt: job.finished_at ?? null,
+        downloadAvailable: job.status === "completed" && !!job.output_key,
+      })) }, 200, headers);
+    }
+    const publicJobMatch = path.match(/^\/api\/v1\/render\/jobs\/([0-9a-f-]{36})(?:\/(download|cancel))?$/i);
+    if (publicJobMatch) {
+      const jobId = publicJobMatch[1];
+      const action = publicJobMatch[2] || "";
+      const job = await env.DB.prepare("SELECT id,owner_id,project_id,status,progress,output_key,output_size_bytes,error_code,error_message,attempts,created_at,updated_at,finished_at FROM render_jobs WHERE id=? AND owner_id=? LIMIT 1")
+        .bind(jobId, user.sub).first<RenderJobRow>();
+      if (!job) return fail("RENDER_JOB_NOT_FOUND", "Không tìm thấy render job hoặc bạn không có quyền.", requestId, 404, headers);
+      if (action === "download" && method === "GET") {
+        if (job.status !== "completed" || !job.output_key) return fail("RENDER_NOT_READY", "MP4 chưa sẵn sàng để tải.", requestId, 409, headers);
+        if (!env.ASSETS) return fail("OBJECT_STORAGE_NOT_CONFIGURED", "R2 chưa được khai báo.", requestId, 503, headers);
+        const object = await env.ASSETS.get(job.output_key);
+        if (!object) return fail("RENDER_OUTPUT_MISSING", "File MP4 không còn trong R2.", requestId, 404, headers);
+        const downloadHeaders = new Headers(headers);
+        object.writeHttpMetadata(downloadHeaders);
+        downloadHeaders.set("content-type", "video/mp4");
+        downloadHeaders.set("content-disposition", "attachment; filename=\"hendy-render-" + jobId + ".mp4\"");
+        downloadHeaders.set("cache-control", "private, no-store");
+        if (object.httpEtag) downloadHeaders.set("etag", object.httpEtag);
+        return new Response(object.body, { status: 200, headers: downloadHeaders });
+      }
+      if (action === "cancel" && method === "POST") {
+        if (user.role === "viewer") return fail("ROLE_FORBIDDEN", "Tài khoản viewer không được hủy render.", requestId, 403, headers);
+        if (job.status !== "queued") return fail("RENDER_ALREADY_STARTED", "Chỉ render job đang chờ mới có thể hủy bằng API hiện tại.", requestId, 409, headers);
+        await env.DB.prepare("UPDATE render_jobs SET status='cancelled',updated_at=?,finished_at=? WHERE id=? AND owner_id=? AND status='queued'")
+          .bind(new Date().toISOString(), new Date().toISOString(), jobId, user.sub).run();
+        return json({ cancelled: true, id: jobId }, 200, headers);
+      }
+      if (method !== "GET" || action) return fail("METHOD_NOT_ALLOWED", "Method không được hỗ trợ cho render job.", requestId, 405, headers);
+      return json({ job: {
+        id: job.id, projectId: job.project_id, status: job.status, progress: job.progress, attempts: job.attempts,
+        outputSizeBytes: job.output_size_bytes ?? null, errorCode: job.error_code, errorMessage: job.error_message,
+        createdAt: job.created_at, updatedAt: job.updated_at, finishedAt: job.finished_at ?? null,
+        downloadAvailable: job.status === "completed" && !!job.output_key,
+      } }, 200, headers);
+    }
 
     if (path === "/api/v1/projects" && method === "GET") {
       const result = await env.DB.prepare("SELECT id,name,status,manifest_json,created_at,updated_at FROM projects WHERE owner_id = ? ORDER BY updated_at DESC LIMIT 200").bind(user.sub).all<ProjectRow>();

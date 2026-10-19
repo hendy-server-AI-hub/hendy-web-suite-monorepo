@@ -31,6 +31,12 @@ CREATE TABLE IF NOT EXISTS render_jobs (
   project_id TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','processing','completed','failed','cancelled')),
   progress INTEGER NOT NULL DEFAULT 0 CHECK(progress BETWEEN 0 AND 100),
+  attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts BETWEEN 0 AND 10),
+  lease_until INTEGER,
+  worker_id TEXT,
+  started_at TEXT,
+  finished_at TEXT,
+  output_size_bytes INTEGER,
   output_key TEXT,
   error_code TEXT,
   error_message TEXT,
@@ -41,3 +47,4 @@ CREATE TABLE IF NOT EXISTS render_jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_render_jobs_owner_created ON render_jobs(owner_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_render_jobs_status_updated ON render_jobs(status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_render_jobs_claim ON render_jobs(status, lease_until, created_at);
