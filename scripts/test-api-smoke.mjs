@@ -12,7 +12,9 @@ const child = spawn(command, ["wrangler", "dev", "--local", "--port", String(por
   cwd: root,
   env: { ...process.env, NO_COLOR: "1" },
   stdio: ["ignore", "pipe", "pipe"],
+  detached: process.platform !== "win32",
 });
+const closed = new Promise((resolveClose) => child.once("close", (code, signal) => resolveClose({ code, signal })));
 let logs = "";
 child.stdout.on("data", (chunk) => { logs += String(chunk); });
 child.stderr.on("data", (chunk) => { logs += String(chunk); });
@@ -81,5 +83,16 @@ try {
   console.error(logs.slice(-7000));
   process.exitCode = 1;
 } finally {
-  child.kill("SIGTERM");
+  try {
+    if (child.pid && process.platform !== "win32") process.kill(-child.pid, "SIGTERM");
+    else child.kill("SIGTERM");
+  } catch { /* process can already be gone */ }
+  const stopped = await Promise.race([closed.then(() => true), delay(2500).then(() => false)]);
+  if (!stopped) {
+    try {
+      if (child.pid && process.platform !== "win32") process.kill(-child.pid, "SIGKILL");
+      else child.kill("SIGKILL");
+    } catch { /* process can already be gone */ }
+    await Promise.race([closed, delay(1500)]);
+  }
 }
