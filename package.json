@@ -26,7 +26,9 @@
     "build:api": "npm run build --workspace=@hendy/api",
     "build": "npm run typecheck && npm run build:admin && npm run build:studio && npm run build:site && npm run build:api",
     "check:structure": "node scripts/check-structure.mjs",
-    "clean": "node scripts/clean.mjs"
+    "clean": "node scripts/clean.mjs",
+    "bootstrap:production": "node scripts/bootstrap-production.mjs",
+    "bootstrap:admin": "node scripts/bootstrap-admin.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.15.30",
