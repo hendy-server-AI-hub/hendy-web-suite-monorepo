@@ -1,0 +1,22 @@
+name = "hendy-suite-api"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+workers_dev = true
+
+[vars]
+APP_NAME = "Hendy Suite API"
+APP_VERSION = "1.0.0"
+APP_ENV = "production"
+CORS_ORIGIN = "*"
+
+# Optional D1 binding: create a database first, fill database_id, then uncomment.
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "hendy-suite-db"
+# database_id = "REPLACE_WITH_REAL_D1_DATABASE_ID"
+# migrations_dir = "migrations"
+
+# Optional R2 binding for uploaded source files:
+# [[r2_buckets]]
+# binding = "ASSETS"
+# bucket_name = "hendy-suite-assets"

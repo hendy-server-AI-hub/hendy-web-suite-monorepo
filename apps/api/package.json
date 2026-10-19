@@ -1,0 +1,9 @@
+{
+  "name": "@hendy/api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "dev": "wrangler dev --ip 0.0.0.0", "typecheck": "tsc --noEmit -p tsconfig.json", "build": "wrangler deploy --dry-run" },
+  "dependencies": { "@hendy/shared-types": "1.0.0" },
+  "devDependencies": { "wrangler": "^4.30.0" }
+}
