@@ -55,3 +55,9 @@ button:disabled{cursor:not-allowed;opacity:.38}
 .auth-active{display:flex;align-items:center;gap:10px;padding:14px;background:#1a302d;border:1px solid #2e6254;border-radius:8px;color:#68d4b0;font-size:11px}
 .auth-active b,.auth-active small{display:block}
 .auth-active small{margin-top:4px;color:#9bbdb3}
+
+
+.download-btn{display:flex;align-items:center;gap:6px;height:31px;padding:0 10px;border:1px solid #3d735f;border-radius:6px;background:#17352d;color:#a8ead0;font-size:10px;font-weight:600;white-space:nowrap}
+.download-btn:hover{background:#1d4438}
+.download-btn:disabled{opacity:.5;cursor:progress}
+.render-failed-label{font-size:8px;color:#f29ba8;max-width:95px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
