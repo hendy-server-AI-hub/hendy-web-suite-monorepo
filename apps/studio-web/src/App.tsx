@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import {
-  AudioLines, ChevronDown, CircleHelp, Clapperboard, CloudUpload, FileVideo2,
+  AudioLines, Check, ChevronDown, CircleHelp, Clapperboard, CloudUpload, FileVideo2,
   Film, FolderOpen, Grid2X2, Layers, Maximize2, Mic2, MoreHorizontal, Music2,
-  Pause, Play, Plus, Redo2, Scissors, Settings2, Sparkles, Subtitles, Undo2,
+  Pause, Play, Plus, Redo2, Scissors, Settings2, ShieldCheck, Sparkles, Subtitles, Undo2,
   Volume2, WandSparkles, ZoomIn, ZoomOut,
 } from "lucide-react";
 import type { RenderManifest } from "@hendy/shared-types";
@@ -250,7 +250,7 @@ export default function App() {
     showNotice(`Đã cắt “${selectedClip.name}” tại ${formatTimecode(splitAt)}.`, "success");
   }
 
-  async function submitLogin(event: React.FormEvent<HTMLFormElement>) {
+  async function submitLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!isApiConfigured) {
       showNotice("Chưa cấu hình VITE_API_BASE_URL. Sao chép apps/studio-web/.env.example thành .env.local và đặt URL Worker.", "warning");
@@ -280,7 +280,7 @@ export default function App() {
     showNotice("Đã đăng xuất API.", "info");
   }
 
-  async function handleFilesSelected(event: React.ChangeEvent<HTMLInputElement>) {
+  async function handleFilesSelected(event: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.currentTarget.files || []);
     event.currentTarget.value = "";
     if (!files.length) return;
@@ -556,6 +556,18 @@ export default function App() {
         <section className="property-section"><div className="property-title"><AudioLines size={15}/><b>Âm thanh</b><ChevronDown size={14}/></div><div className="slider-label"><span>Âm lượng clip</span><b>100%</b></div><div className="property-slider"><i/></div><div className="toggle-row"><div><b>Duck nhạc nền</b><small>Giảm nhạc khi có giọng nói</small></div><button className={`switch ${duckEnabled?"on":""}`} aria-label="Bật hoặc tắt duck nhạc nền" aria-pressed={duckEnabled} onClick={()=>setDuckEnabled((value)=>!value)}><i/></button></div></section>
       </div><div className="inspector-bottom"><button onClick={resetTimeline}>Đặt lại timeline</button><button className="apply-btn" onClick={()=>showNotice("Thay đổi timeline được tự lưu cục bộ. Các thông số Inspector hiện vẫn là UI mẫu, chưa ghi vào manifest.","info")}>Áp dụng</button></div></aside>
     </div>
+    {showAuth && <div className="auth-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowAuth(false); }}>
+      <form className="auth-dialog" onSubmit={submitLogin}>
+        <div className="auth-dialog-head"><div><span className="auth-icon"><ShieldCheck size={18}/></span><div><b>Đăng nhập Hendy API</b><small>Phiên đăng nhập dùng Bearer token</small></div></div><button type="button" aria-label="Đóng" onClick={() => setShowAuth(false)}>×</button></div>
+        {apiToken ? <div className="auth-active"><Check size={17}/><div><b>Đã đăng nhập</b><small>{userEmail || "Tài khoản API"}</small></div></div> : <>
+          <label>Email<input type="email" autoComplete="username" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} required placeholder="admin@example.com"/></label>
+          <label>Mật khẩu<input type="password" autoComplete="current-password" value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} required minLength={12} maxLength={128} placeholder="Ít nhất 12 ký tự"/></label>
+          <p className="auth-help">Tạo tài khoản owner một lần bằng lệnh <code>npm run bootstrap:admin</code>. Mật khẩu không được lưu trong trình duyệt; token lưu cục bộ để gọi API.</p>
+          <button className="auth-submit" type="submit" disabled={authBusy || !isApiConfigured}>{authBusy ? "Đang đăng nhập…" : "Đăng nhập"}</button>
+        </>}
+        {apiToken && <button className="auth-submit auth-logout" type="button" onClick={() => { signOut(); setShowAuth(false); }}>Đăng xuất</button>}
+      </form>
+    </div>}
     {notice && <div className={`studio-toast toast-${noticeKind}`} role="status" aria-live="polite"><span>{notice}</span><button aria-label="Đóng thông báo" onClick={()=>setNotice("")}>×</button></div>}
   </div>;
 }
