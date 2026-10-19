@@ -39,6 +39,10 @@ jobs:
           cp -R apps/studio-web/dist/. release-bundle/studio-web/
           cp -R apps/site/dist/. release-bundle/site/
           cp apps/api/wrangler.toml release-bundle/api/
+          mkdir -p release-bundle/render-worker release-bundle/docs
+          cp -R services/render-worker/. release-bundle/render-worker/
+          cp docker-compose.render.yml .env.render.example release-bundle/
+          cp docs/PRODUCTION_BOOTSTRAP.md release-bundle/docs/
           cp README.md release-bundle/README-monorepo.md
           printf 'Hendy Web Suite release: %s\n' "$GITHUB_REF_NAME" > release-bundle/VERSION.txt
           cd release-bundle

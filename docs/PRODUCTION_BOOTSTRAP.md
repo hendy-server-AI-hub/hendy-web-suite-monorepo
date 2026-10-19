@@ -1,49 +1,79 @@
-# Production provisioning
+# Production bootstrap and deployment
 
-This repository provides a local bootstrap script to declare Cloudflare resources and GitHub Actions secrets. The first Cloudflare API token and GitHub CLI login must be supplied by a repository/account administrator; source code cannot create credentials without an existing authorized credential.
+This is a production-oriented foundation, not a claim that every external service has already been deployed. Cloudflare secrets are not created from nothing: the bootstrap script needs an administrator-authorized Cloudflare API token and a GitHub CLI session. Do not paste credentials into chat or commit them.
 
 ## Prerequisites
 
-- Node.js 22+, Git and GitHub CLI (`gh`)
-- `gh auth login` with permission to set repository Actions secrets and push to `main`
-- A Cloudflare API token scoped to the target account with Workers Scripts: Edit, D1: Edit and R2 Storage: Edit
-- Cloudflare Account ID and the real HTTPS origins of the deployed Admin/Studio/site
+- Node.js 22+, Git, Docker + Docker Compose, GitHub CLI (gh)
+- gh auth login under an account that can push to main and write repository Actions secrets
+- Cloudflare API token scoped to the intended account with Workers Scripts: Edit, D1: Edit and R2 Storage: Edit
+- Cloudflare Account ID, public HTTPS application origins and the intended public Worker API URL
+- A Docker host with network access to the Worker API to run FFmpeg
 
-## Provision and deploy
+## Automated provisioning
 
-From a clean local clone:
+From a local clone:
 
-```bash
+\`\`\`bash
 npm install
 npm run bootstrap:production:push
-```
+\`\`\`
 
-The script asks for repository, Cloudflare Account ID, hidden Cloudflare token input and HTTPS origins. It creates D1 database `hendy-suite-db` and R2 bucket `hendy-suite-assets` when absent, generates `AUTH_JWT_SECRET` and `BOOTSTRAP_ADMIN_KEY`, declares four GitHub Actions secrets, updates `apps/api/wrangler.toml`, applies remote D1 migrations and pushes the config. Never commit or share `.env.production.local`; Git ignores this file and it only holds the generated application secrets.
+The script prompts for the repository, Cloudflare Account ID, hidden Cloudflare token entry, HTTPS app origins and Worker API URL. It then:
+
+1. Validates the Cloudflare API token.
+2. Creates the D1 database hendy-suite-db and R2 bucket hendy-suite-assets if absent.
+3. Generates independent cryptographic secrets for AUTH_JWT_SECRET, BOOTSTRAP_ADMIN_KEY and RENDER_SERVICE_TOKEN.
+4. Writes real D1/R2 bindings and a CORS allowlist to apps/api/wrangler.toml.
+5. Sets GitHub Actions secrets with gh secret set via stdin, not command-line arguments.
+6. Writes ignored local-only .env.production.local and .env.render.local files with restrictive permissions; the Cloudflare API token is not written to disk.
+7. Applies remote D1 migrations and, with the :push variant, commits/pushes only apps/api/wrangler.toml to main.
 
 Required GitHub Actions secrets:
-- `CLOUDFLARE_API_TOKEN`
-- `CLOUDFLARE_ACCOUNT_ID`
-- `AUTH_JWT_SECRET`
-- `BOOTSTRAP_ADMIN_KEY`
+- CLOUDFLARE_API_TOKEN
+- CLOUDFLARE_ACCOUNT_ID
+- AUTH_JWT_SECRET
+- BOOTSTRAP_ADMIN_KEY
+- RENDER_SERVICE_TOKEN
 
-After GitHub Actions deploys the Worker, run:
+The Worker deploy workflow always builds and typechecks. It deploys only when all five secrets exist. After deployment, it sets AUTH_JWT_SECRET, BOOTSTRAP_ADMIN_KEY and RENDER_SERVICE_TOKEN inside Cloudflare Workers.
 
-```bash
+The first Cloudflare API token must be created by an account admin in Cloudflare and entered in the hidden terminal prompt; source code cannot create its own initial credential. The script fails if that token lacks D1, R2 or Worker permissions.
+
+## Initial owner account
+
+After the Worker has deployed:
+
+\`\`\`bash
 npm run bootstrap:admin
-```
+\`\`\`
 
-Enter the deployed Worker URL, owner email and a password (12–128 characters) in the prompts. The API allows this endpoint only while the users table is empty. Studio's account button opens the login dialog; upload requires a session.
+The script defaults to the Worker URL saved in .env.production.local. Enter the owner email and a 12–128 character password twice; password input is hidden. The endpoint can create an owner only while the users table is empty, then returns HTTP 409 on later calls.
 
-## Endpoints implemented
+## FFmpeg render worker
 
-- `POST /api/v1/auth/bootstrap` and `POST /api/v1/auth/login`
-- `GET /api/v1/auth/me`
-- `GET/POST /api/v1/projects` and `GET/PUT/DELETE /api/v1/projects/:uuid`
-- `GET/POST /api/v1/assets` and `GET/DELETE /api/v1/assets/:uuid`
-- Public health/meta and manifest validation endpoints
+Cloudflare Workers do not execute FFmpeg binaries, so the separate Docker service is used:
 
-Studio uploads files to private R2 via the API (20 MiB maximum per file), saves project metadata/manifest in D1, and stores login token in the current browser's local storage. CORS allowlist must match the deployed app origins.
+\`\`\`bash
+npm run render:check
+npm run render:up
+npm run render:logs
+\`\`\`
 
-## Still required before a full production launch
+The bootstrap creates .env.render.local with the API URL and private RENDER_SERVICE_TOKEN. Run Compose on a trusted Docker host. The container uses a non-root user, a read-only root filesystem, bounded temp storage, CPU/memory/pid limits and log rotation; it does not publish a public HTTP port. A GitHub Actions workflow builds and publishes the render-worker image to GHCR when its source changes.
 
-MP4 render/FFmpeg worker is not implemented; a D1 table for render-job tracking is only a schema foundation. Also configure rate limiting/WAF, backups and restore tests, alerts, account recovery/MFA, quotas and monitoring. The admin dashboard has demo metrics and Flutter/Python/installer source packages are not included in the supplied starter; do not treat those parts as production-complete.
+Render limits in this iteration: 120 clips, 30 minutes, 4K/60 FPS, 20 MiB per input, 250 MiB aggregate source download by default, and 80 MiB per MP4 output uploaded through the Worker. Larger outputs require direct-to-R2 upload rather than proxying through the Worker. D1 stores job leases and retry attempts. Each container processes one job at a time; run separate replicas with unique worker IDs for more capacity.
+
+## Implemented authenticated API
+
+- POST /api/v1/auth/bootstrap, POST /api/v1/auth/login, GET /api/v1/auth/me
+- GET/POST /api/v1/projects and GET/PUT/DELETE /api/v1/projects/:uuid
+- GET/POST /api/v1/assets and GET/DELETE /api/v1/assets/:uuid
+- POST /api/v1/render/validate, POST/GET /api/v1/render/jobs, GET /api/v1/render/jobs/:uuid, POST /api/v1/render/jobs/:uuid/cancel, GET /api/v1/render/jobs/:uuid/download
+- Internal authenticated worker endpoints under /internal/render/*
+
+Project/asset endpoints use D1 and private R2. Viewer accounts are read-only. Password hashes use salted PBKDF2-HMAC-SHA256; API Bearer tokens are HS256 and expire after eight hours. Studio and Admin currently store the short-lived bearer token in browser localStorage, which makes XSS prevention an important production concern.
+
+## Before exposing to the public
+
+Configure Cloudflare rate limiting/WAF, monitoring/alerts, backup/restore tests, incident handling, account recovery/MFA and quota/billing controls. The Admin activity feed is demo data; real metrics, finance, user management and AI processing are not fully integrated. The original Flutter/Python/Windows installer source packages were not in the supplied archive and must be restored from their originals. Run a security review, end-to-end tests and verify actual Cloudflare deployment before calling the complete product production-ready.
