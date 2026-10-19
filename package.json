@@ -34,7 +34,8 @@
     "render:check": "node --check services/render-worker/src/index.mjs",
     "render:up": "docker compose --env-file .env.render.local -f docker-compose.render.yml up -d --build",
     "render:logs": "docker compose --env-file .env.render.local -f docker-compose.render.yml logs -f --tail=200",
-    "render:down": "docker compose --env-file .env.render.local -f docker-compose.render.yml down"
+    "render:down": "docker compose --env-file .env.render.local -f docker-compose.render.yml down",
+    "check:scripts": "node --check scripts/bootstrap-production.mjs && node --check scripts/bootstrap-admin.mjs && node --check scripts/test-api-smoke.mjs && node --check scripts/check-structure.mjs && node --check scripts/clean.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.15.30",
