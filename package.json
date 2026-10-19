@@ -28,7 +28,8 @@
     "check:structure": "node scripts/check-structure.mjs",
     "clean": "node scripts/clean.mjs",
     "bootstrap:production": "node scripts/bootstrap-production.mjs",
-    "bootstrap:admin": "node scripts/bootstrap-admin.mjs"
+    "bootstrap:admin": "node scripts/bootstrap-admin.mjs",
+    "bootstrap:production:push": "node scripts/bootstrap-production.mjs --push"
   },
   "devDependencies": {
     "@types/node": "^22.15.30",
