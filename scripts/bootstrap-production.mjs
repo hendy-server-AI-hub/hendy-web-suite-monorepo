@@ -203,7 +203,17 @@ async function main() {
 
   console.log("\n✓ Cloudflare resources đã sẵn sàng và GitHub secrets đã được khai báo.");
   console.log("Cấu hình local đã được cập nhật: apps/api/wrangler.toml.");
-  console.log("Nếu script không tự commit/push, hãy kiểm tra thay đổi, sau đó commit và push để CI triển khai Worker.");
+  if (process.argv.includes("--push")) {
+    const branch = command("git", ["branch", "--show-current"]).trim();
+    if (branch !== "main") throw new Error("--push yêu cầu checkout nhánh main; hiện tại là " + (branch || "(detached HEAD)") + ".");
+    command("git", ["add", "apps/api/wrangler.toml"]);
+    command("git", ["commit", "-m", "chore: configure production Cloudflare bindings", "--", "apps/api/wrangler.toml"]);
+    command("git", ["push", "origin", "main"]);
+    console.log("✓ Đã commit/push wrangler.toml; GitHub Actions sẽ chạy deploy nếu secrets hợp lệ.");
+  } else {
+    console.log("Để tự commit/push file cấu hình và kích hoạt CI, chạy npm run bootstrap:production:push.");
+    console.log("Hoặc kiểm tra rồi commit apps/api/wrangler.toml bằng tay.");
+  }
   console.log("Tiếp theo: sau khi Worker deploy thành công, chạy npm run bootstrap:admin để tạo tài khoản owner.");
   console.log("Lưu ý: token Cloudflare không được ghi vào file local; AUTH_JWT_SECRET và BOOTSTRAP_ADMIN_KEY nằm trong file .env.production.local — không chia sẻ file này.");
 }
