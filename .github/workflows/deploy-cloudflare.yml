@@ -41,13 +41,23 @@ jobs:
       - name: Validate Worker bundle
         run: npm run build:api
       - name: Deploy Worker to Cloudflare
-        if: ${{ env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != '' }}
+        if: ${{ env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != '' && secrets.AUTH_JWT_SECRET != '' && secrets.BOOTSTRAP_ADMIN_KEY != '' }}
         uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ env.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: apps/api
           command: deploy
+      - name: Configure Worker authentication secrets
+        if: ${{ env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != '' && secrets.AUTH_JWT_SECRET != '' && secrets.BOOTSTRAP_ADMIN_KEY != '' }}
+        shell: bash
+        env:
+          AUTH_JWT_SECRET: ${{ secrets.AUTH_JWT_SECRET }}
+          BOOTSTRAP_ADMIN_KEY: ${{ secrets.BOOTSTRAP_ADMIN_KEY }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$AUTH_JWT_SECRET" | npx wrangler secret put AUTH_JWT_SECRET --config apps/api/wrangler.toml
+          printf '%s' "$BOOTSTRAP_ADMIN_KEY" | npx wrangler secret put BOOTSTRAP_ADMIN_KEY --config apps/api/wrangler.toml
       - name: Explain skipped deployment
-        if: ${{ env.CLOUDFLARE_API_TOKEN == '' || env.CLOUDFLARE_ACCOUNT_ID == '' }}
-        run: echo "::warning::Cloudflare deploy skipped. Set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID in repository Actions secrets to deploy the Worker."
+        if: ${{ env.CLOUDFLARE_API_TOKEN == '' || env.CLOUDFLARE_ACCOUNT_ID == '' || secrets.AUTH_JWT_SECRET == '' || secrets.BOOTSTRAP_ADMIN_KEY == '' }}
+        run: echo "::warning::Cloudflare deploy skipped. Run npm run bootstrap:production locally to provision resources and configure all required GitHub Actions secrets."
