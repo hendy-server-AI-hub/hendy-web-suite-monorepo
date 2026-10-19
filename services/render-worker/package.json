@@ -1,0 +1,13 @@
+{
+  "name": "@hendy/render-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.mjs",
+    "check": "node --check src/index.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
