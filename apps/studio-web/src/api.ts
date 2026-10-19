@@ -168,3 +168,55 @@ export async function uploadAsset(file: File): Promise<{ asset: CloudAsset }> {
 export function assetDownloadUrl(assetId: string): string {
   return API_BASE_URL + "/api/v1/assets/" + encodeURIComponent(assetId);
 }
+
+
+export interface RenderJob {
+  id: string;
+  projectId: string;
+  projectName?: string;
+  status: "queued" | "processing" | "completed" | "failed" | "cancelled" | string;
+  progress: number;
+  attempts: number;
+  outputSizeBytes?: number | null;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  finishedAt?: string | null;
+  downloadAvailable: boolean;
+}
+
+export function createRenderJob(projectId: string): Promise<{ job: RenderJob; message: string }> {
+  return requestJson("/api/v1/render/jobs", { method: "POST", body: JSON.stringify({ projectId }) });
+}
+export function getRenderJob(jobId: string): Promise<{ job: RenderJob }> {
+  return requestJson("/api/v1/render/jobs/" + encodeURIComponent(jobId));
+}
+export function listRenderJobs(): Promise<{ jobs: RenderJob[] }> {
+  return requestJson("/api/v1/render/jobs");
+}
+export async function downloadRenderOutput(jobId: string): Promise<Blob> {
+  if (!API_BASE_URL) throw new Error("Chưa cấu hình VITE_API_BASE_URL.");
+  const token = getAccessToken();
+  if (!token) throw new Error("Đăng nhập trước khi tải MP4.");
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 120_000);
+  try {
+    const response = await fetch(API_BASE_URL + "/api/v1/render/jobs/" + encodeURIComponent(jobId) + "/download", {
+      headers: { authorization: "Bearer " + token, accept: "video/mp4, application/json" },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const payload: unknown = await response.json().catch(() => null);
+      const apiError = payload as Partial<ApiError> | null;
+      throw new Error(apiError?.error?.message || "Không tải được MP4 (HTTP " + response.status + ").");
+    }
+    return await response.blob();
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw new Error("Tải MP4 quá thời gian chờ.");
+    if (error instanceof TypeError) throw new Error("Không kết nối được API khi tải MP4.");
+    throw error instanceof Error ? error : new Error("Tải MP4 thất bại.");
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
