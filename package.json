@@ -29,7 +29,8 @@
     "clean": "node scripts/clean.mjs",
     "bootstrap:production": "node scripts/bootstrap-production.mjs",
     "bootstrap:admin": "node scripts/bootstrap-admin.mjs",
-    "bootstrap:production:push": "node scripts/bootstrap-production.mjs --push"
+    "bootstrap:production:push": "node scripts/bootstrap-production.mjs --push",
+    "test:api": "node scripts/test-api-smoke.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.15.30",
