@@ -98,10 +98,10 @@ function allowedMime(mime: string): boolean { return /^(video\/(mp4|webm|quickti
 async function route(request: Request, env: Env, requestId: string, headers: Record<string, string>): Promise<Response> {
   const url = new URL(request.url); const path = url.pathname.replace(/\/+$/, "") || "/"; const method = request.method.toUpperCase();
   if (method === "GET" && (path === "/healthz" || path === "/api/v1/health")) {
-    return json({ status: "ok", service: env.APP_NAME || "Hendy Suite API", version: env.APP_VERSION || "1.0.0", environment: env.APP_ENV || "development", capabilities: { databaseConfigured: !!env.DB, objectStorageConfigured: !!env.ASSETS, authenticationConfigured: !!env.AUTH_JWT_SECRET }, timestamp: new Date().toISOString(), requestId }, 200, headers);
+    return json({ status: "ok", service: env.APP_NAME || "Hendy Suite API", version: env.APP_VERSION || "1.0.0", environment: env.APP_ENV || "development", capabilities: { databaseConfigured: !!env.DB, objectStorageConfigured: !!env.ASSETS, authenticationConfigured: !!env.AUTH_JWT_SECRET, renderWorkerConfigured: !!env.RENDER_SERVICE_TOKEN }, timestamp: new Date().toISOString(), requestId }, 200, headers);
   }
   if (method === "GET" && path === "/api/v1/meta") {
-    const data: ApiMeta = { name: env.APP_NAME || "Hendy Suite API", version: env.APP_VERSION || "1.0.0", environment: env.APP_ENV || "development", features: ["health-check", "manifest-validation", ...(env.DB ? ["user-auth", "project-storage"] : []), ...(env.DB && env.ASSETS ? ["asset-library"] : [])] };
+    const data: ApiMeta = { name: env.APP_NAME || "Hendy Suite API", version: env.APP_VERSION || "1.0.0", environment: env.APP_ENV || "development", features: ["health-check", "manifest-validation", ...(env.DB ? ["user-auth", "project-storage"] : []), ...(env.DB && env.ASSETS ? ["asset-library"] : []), ...(env.DB && env.ASSETS && env.RENDER_SERVICE_TOKEN ? ["render-jobs"] : [])] };
     return json(data, 200, headers);
   }
 
@@ -295,6 +295,8 @@ async function route(request: Request, env: Env, requestId: string, headers: Rec
       const totalDuration = Math.max(0, ...clipList.map((clip) => clip.start + clip.duration));
       if (totalDuration <= 0 || totalDuration > MAX_RENDER_DURATION_SECONDS) return fail("RENDER_DURATION_LIMIT", "Thời lượng render tối đa là 30 phút.", requestId, 422, headers);
       if (checked.manifest.output.width > 3840 || checked.manifest.output.height > 2160 || checked.manifest.output.fps > 60) return fail("RENDER_SPEC_LIMIT", "Render API giới hạn ở 4K/60 FPS để bảo vệ tài nguyên.", requestId, 422, headers);
+      const activeJobs = await env.DB.prepare("SELECT COUNT(*) AS count FROM render_jobs WHERE owner_id=? AND status IN ('queued','processing')").bind(user.sub).first<{ count: number }>();
+      if ((activeJobs?.count || 0) >= 2) return fail("RENDER_QUEUE_LIMIT", "Mỗi tài khoản chỉ được có tối đa 2 render job đang chờ hoặc chạy.", requestId, 429, headers);
       const assetIds = [...new Set(clipList.map((clip) => clip.assetId))];
       const placeholders = assetIds.map(() => "?").join(",");
       const rows = await env.DB.prepare("SELECT id FROM assets WHERE owner_id=? AND id IN (" + placeholders + ")").bind(user.sub, ...assetIds).all<{ id: string }>();
@@ -359,6 +361,7 @@ async function route(request: Request, env: Env, requestId: string, headers: Rec
       return json({ projects }, 200, headers);
     }
     if (path === "/api/v1/projects" && method === "POST") {
+      if (user.role === "viewer") return fail("ROLE_FORBIDDEN", "Tài khoản viewer chỉ được xem dữ liệu.", requestId, 403, headers);
       const parsed = await readJson(request); if ("error" in parsed) return fail("INVALID_JSON", parsed.error, requestId, parsed.status, headers);
       const body = asRecord(parsed.value); const name = typeof body?.name === "string" ? body.name.trim() : "";
       if (!name || name.length > 200) return fail("INVALID_PROJECT_NAME", "Tên dự án phải có từ 1 đến 200 ký tự.", requestId, 422, headers);
@@ -373,6 +376,8 @@ async function route(request: Request, env: Env, requestId: string, headers: Rec
       const exists = await env.DB.prepare("SELECT id,name,status,manifest_json,created_at,updated_at FROM projects WHERE id = ? AND owner_id = ? LIMIT 1").bind(projectId, user.sub).first<ProjectRow>();
       if (!exists) return fail("PROJECT_NOT_FOUND", "Không tìm thấy dự án hoặc bạn không có quyền truy cập.", requestId, 404, headers);
       if (method === "GET") return json({ project: { id: exists.id, name: exists.name, status: exists.status, manifest: exists.manifest_json ? JSON.parse(exists.manifest_json) : null, createdAt: exists.created_at, updatedAt: exists.updated_at } }, 200, headers);
+      if (method === "DELETE" && user.role === "viewer") return fail("ROLE_FORBIDDEN", "Tài khoản viewer không được xóa dự án.", requestId, 403, headers);
+      if (method === "PUT" && user.role === "viewer") return fail("ROLE_FORBIDDEN", "Tài khoản viewer không được sửa dự án.", requestId, 403, headers);
       if (method === "DELETE") { await env.DB.prepare("DELETE FROM projects WHERE id = ? AND owner_id = ?").bind(projectId, user.sub).run(); return json({ deleted: true, id: projectId }, 200, headers); }
       const parsed = await readJson(request); if ("error" in parsed) return fail("INVALID_JSON", parsed.error, requestId, parsed.status, headers);
       const body = asRecord(parsed.value); let name = exists.name; let manifestJson = exists.manifest_json;
@@ -402,6 +407,7 @@ async function route(request: Request, env: Env, requestId: string, headers: Rec
       return json({ assets: result.results || [] }, 200, headers);
     }
     if (path === "/api/v1/assets" && method === "POST") {
+      if (user.role === "viewer") return fail("ROLE_FORBIDDEN", "Tài khoản viewer không được upload.", requestId, 403, headers);
       if (!env.ASSETS) return fail("OBJECT_STORAGE_NOT_CONFIGURED", "R2 chưa được khai báo. Chạy npm run bootstrap:production.", requestId, 503, headers);
       if (Number(request.headers.get("content-length") || "0") > MAX_UPLOAD_BYTES + 100_000) return fail("FILE_TOO_LARGE", "Giới hạn upload hiện tại là 20 MB mỗi file.", requestId, 413, headers);
       if (!(request.headers.get("content-type") || "").toLowerCase().startsWith("multipart/form-data")) return fail("UNSUPPORTED_UPLOAD", "Upload dùng multipart/form-data với trường file.", requestId, 415, headers);
@@ -427,6 +433,7 @@ async function route(request: Request, env: Env, requestId: string, headers: Rec
     if (assetMatch && ["GET", "DELETE"].includes(method)) {
       const assetId = assetMatch[1]; const asset = await env.DB.prepare("SELECT id,owner_id,name,mime_type,size_bytes,r2_key,created_at FROM assets WHERE id = ? AND owner_id = ? LIMIT 1").bind(assetId, user.sub).first<AssetRow>();
       if (!asset) return fail("ASSET_NOT_FOUND", "Không tìm thấy tài nguyên hoặc bạn không có quyền truy cập.", requestId, 404, headers);
+      if (method === "DELETE" && user.role === "viewer") return fail("ROLE_FORBIDDEN", "Tài khoản viewer không được xóa tài nguyên.", requestId, 403, headers);
       if (method === "DELETE") { if (env.ASSETS) await env.ASSETS.delete(asset.r2_key); await env.DB.prepare("DELETE FROM assets WHERE id = ? AND owner_id = ?").bind(assetId, user.sub).run(); return json({ deleted: true, id: assetId }, 200, headers); }
       if (!env.ASSETS) return fail("OBJECT_STORAGE_NOT_CONFIGURED", "R2 chưa được khai báo.", requestId, 503, headers);
       const object = await env.ASSETS.get(asset.r2_key); if (!object) return fail("ASSET_OBJECT_MISSING", "Metadata tồn tại nhưng file trong R2 không tìm thấy.", requestId, 404, headers);

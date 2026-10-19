@@ -1,5 +1,5 @@
 -- Add worker lease/retry/progress metadata to the render queue.
--- This is a separate migration to keep 0002 immutable for installations that already applied it.
+-- Separate migration so previously-applied 0002 stays immutable.
 ALTER TABLE render_jobs ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts BETWEEN 0 AND 10);
 ALTER TABLE render_jobs ADD COLUMN lease_until INTEGER;
 ALTER TABLE render_jobs ADD COLUMN worker_id TEXT;

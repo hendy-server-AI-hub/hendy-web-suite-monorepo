@@ -34,5 +34,7 @@ jobs:
         run: npm run typecheck
       - name: API smoke tests
         run: npm run test:api
+      - name: Validate FFmpeg render worker JavaScript
+        run: npm run render:check
       - name: Build all apps and Worker
         run: npm run build
