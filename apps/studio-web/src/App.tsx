@@ -22,6 +22,7 @@ type Asset = { icon: typeof FileVideo2; name: string; detail: string; kind: Asse
 type SavedProject = {
   version: 1;
   projectId: string;
+  cloudProjectId?: string;
   timelineName: string;
   clips: Clip[];
   playheadSeconds: number;
@@ -141,7 +142,7 @@ export default function App() {
   const [authPassword, setAuthPassword] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
   const [uploadBusy, setUploadBusy] = useState(false);
-  const [cloudProjectId, setCloudProjectId] = useState("");
+  const [cloudProjectId, setCloudProjectId] = useState(loadedProject?.cloudProjectId ?? "");
   const [selectedAssetName, setSelectedAssetName] = useState(loadedProject?.selectedAssetName ?? sourceAssets[0].name);
   const [selectedClipId, setSelectedClipId] = useState<number | null>(loadedProject ? loadedProject.selectedClipId : 2);
   const [playing, setPlaying] = useState(false);
@@ -447,6 +448,7 @@ export default function App() {
         const project: SavedProject = {
           version: 1,
           projectId,
+          cloudProjectId,
           timelineName,
           clips,
           playheadSeconds,
@@ -466,7 +468,7 @@ export default function App() {
       }
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [projectId, timelineName, clips, playheadSeconds, zoom, selectedClipId, selectedAssetName, showSubtitles, strokeEnabled, shadowEnabled, duckEnabled, subtitleColor, playing]);
+  }, [projectId, cloudProjectId, timelineName, clips, playheadSeconds, zoom, selectedClipId, selectedAssetName, showSubtitles, strokeEnabled, shadowEnabled, duckEnabled, subtitleColor, playing]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
