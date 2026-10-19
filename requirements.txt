@@ -1,0 +1,2 @@
+# Scaffold CLI currently uses only Python standard library.
+# Add the existing project's Python dependencies below when restoring its original source.
