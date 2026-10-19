@@ -6,7 +6,7 @@ import {
   Volume2, WandSparkles, ZoomIn, ZoomOut,
 } from "lucide-react";
 import type { RenderManifest } from "@hendy/shared-types";
-import { clearAccessToken, createProject, getAccessToken, getApiMeta, getCurrentUser, isApiConfigured, listAssets, login, saveProject, uploadAsset, validateRenderManifest } from "./api";
+import { clearAccessToken, createProject, createRenderJob, downloadRenderOutput, getAccessToken, getApiMeta, getCurrentUser, getRenderJob, isApiConfigured, listAssets, listRenderJobs, login, saveProject, uploadAsset, validateRenderManifest, type RenderJob } from "./api";
 
 type Clip = {
   id: number;
@@ -143,6 +143,10 @@ export default function App() {
   const [authPassword, setAuthPassword] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
   const [uploadBusy, setUploadBusy] = useState(false);
+  const [renderBusy, setRenderBusy] = useState(false);
+  const [renderJob, setRenderJob] = useState<RenderJob | null>(null);
+  const [downloadBusy, setDownloadBusy] = useState(false);
+  const lastRenderNotice = useRef("");
   const [cloudProjectId, setCloudProjectId] = useState(loadedProject?.cloudProjectId ?? "");
   const [selectedAssetName, setSelectedAssetName] = useState(loadedProject?.selectedAssetName ?? sourceAssets[0].name);
   const [selectedClipId, setSelectedClipId] = useState<number | null>(loadedProject ? loadedProject.selectedClipId : 2);
@@ -373,6 +377,67 @@ export default function App() {
     }
   }
 
+  async function requestRender() {
+    if (!isApiConfigured) {
+      showNotice("Chưa cấu hình API URL. Hãy đặt VITE_API_BASE_URL trỏ tới Worker HTTPS.", "warning");
+      return;
+    }
+    if (!apiToken) {
+      setShowAuth(true);
+      showNotice("Đăng nhập để tạo render job.", "warning");
+      return;
+    }
+    if (clips.some((clip) => !clip.assetId)) {
+      showNotice("Chưa thể render: timeline còn clip mẫu. Upload media lên cloud, chọn từng clip mẫu rồi bấm + để thay bằng asset R2.", "warning");
+      return;
+    }
+    setRenderBusy(true);
+    try {
+      let targetId = cloudProjectId;
+      if (!targetId) {
+        const created = await createProject(timelineName);
+        targetId = created.project.id;
+        setCloudProjectId(targetId);
+      }
+      const manifest = toManifest(targetId, clips);
+      await validateRenderManifest(manifest);
+      await saveProject(targetId, { name: timelineName, manifest });
+      setSaveStatus("Đã đồng bộ cloud");
+      const response = await createRenderJob(targetId);
+      setRenderJob(response.job);
+      showNotice("Đã gửi render job. Worker FFmpeg sẽ lấy job từ hàng đợi; bạn có thể tiếp tục chỉnh sửa.", "success");
+    } catch (error) {
+      setSaveStatus("Lỗi đồng bộ");
+      showNotice(error instanceof Error ? error.message : "Không thể tạo render job.", "error");
+    } finally {
+      setRenderBusy(false);
+    }
+  }
+
+  async function downloadCurrentRender() {
+    if (!renderJob || renderJob.status !== "completed" || !renderJob.downloadAvailable) {
+      showNotice("MP4 chưa sẵn sàng.", "warning");
+      return;
+    }
+    setDownloadBusy(true);
+    try {
+      const blob = await downloadRenderOutput(renderJob.id);
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = "hendy-render-" + renderJob.id + ".mp4";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+      showNotice("Đã tải MP4 về thiết bị.", "success");
+    } catch (error) {
+      showNotice(error instanceof Error ? error.message : "Không tải được MP4.", "error");
+    } finally {
+      setDownloadBusy(false);
+    }
+  }
+
   async function checkManifestWithApi() {
     if (!isApiConfigured) {
       showNotice("API chưa được cấu hình. Bản nháp vẫn tự lưu trong trình duyệt; hãy đặt VITE_API_BASE_URL để kiểm tra manifest qua Worker.", "warning");
@@ -382,7 +447,7 @@ export default function App() {
     try {
       const result = await validateRenderManifest(toManifest(projectId, clips));
       setApiStatus("online");
-      showNotice(`Manifest hợp lệ: ${result.clipCount} clip, ${result.trackCount} track. API hiện chỉ xác thực cấu trúc, chưa lưu cloud hoặc render video.`, "success");
+      showNotice(`Manifest hợp lệ: ${result.clipCount} clip, ${result.trackCount} track. Hãy dùng nút Xuất video để tạo render job nếu tài nguyên đã upload lên cloud.`, "success");
     } catch (error) {
       setApiStatus("offline");
       showNotice(error instanceof Error ? error.message : "Không thể kiểm tra manifest qua API.", "error");
@@ -392,9 +457,10 @@ export default function App() {
   useEffect(() => {
     if (!isApiConfigured || !apiToken) return;
     let active = true;
-    Promise.all([getCurrentUser(), listAssets()]).then(([session, response]) => {
+    Promise.all([getCurrentUser(), listAssets(), listRenderJobs()]).then(([session, response, renderResponse]) => {
       if (!active) return;
       setUserEmail(session.user.email);
+      setRenderJob(renderResponse.jobs[0] ?? null);
       const cloudAssets: Asset[] = response.assets.map((asset) => {
         const mime = asset.mime_type.toLowerCase();
         const kind: AssetKind = mime.startsWith("video/") ? "video" : mime.startsWith("audio/") ? "audio" : (mime.startsWith("text/") || mime.includes("subrip")) ? "subtitle" : "image";
@@ -428,6 +494,31 @@ export default function App() {
     });
     return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    if (!renderJob || !apiToken || !["queued", "processing"].includes(renderJob.status)) return;
+    let active = true;
+    const poll = async () => {
+      try {
+        const response = await getRenderJob(renderJob.id);
+        if (active) setRenderJob(response.job);
+      } catch (error) {
+        if (active) showNotice(error instanceof Error ? error.message : "Không đọc được trạng thái render.", "error");
+      }
+    };
+    const timer = window.setInterval(() => { void poll(); }, 3000);
+    void poll();
+    return () => { active = false; window.clearInterval(timer); };
+  }, [renderJob?.id, renderJob?.status, apiToken]);
+
+  useEffect(() => {
+    if (!renderJob || (renderJob.status !== "completed" && renderJob.status !== "failed")) return;
+    const key = renderJob.id + ":" + renderJob.status;
+    if (lastRenderNotice.current === key) return;
+    lastRenderNotice.current = key;
+    if (renderJob.status === "completed") showNotice("Render hoàn tất. MP4 đã được lưu trong R2; bấm Tải MP4 để tải file.", "success");
+    else showNotice("Render thất bại: " + (renderJob.errorMessage || renderJob.errorCode || "Lỗi không xác định"), "error");
+  }, [renderJob?.id, renderJob?.status]);
 
   useEffect(() => {
     if (!playing) return;
@@ -509,7 +600,9 @@ export default function App() {
       <button className="tool-btn" title="Redo" onClick={redo} disabled={!redoStack.length}><Redo2 size={16}/></button>
       <button className="tool-btn help-btn" title="Trợ giúp" onClick={() => showNotice("Mẹo: chọn clip, đặt playhead bên trong clip rồi dùng nút kéo để tách. Dùng Ctrl+Z để hoàn tác, Ctrl+Y hoặc Ctrl+Shift+Z để làm lại.", "info")}><CircleHelp size={16}/></button>
       <button className="cloud-btn" onClick={apiToken ? saveTimelineToCloud : checkManifestWithApi}><CloudUpload size={15}/> {apiToken ? "Lưu cloud" : "Kiểm tra API"}</button>
-      <button className="export-btn" onClick={() => showNotice("Xuất MP4 chưa khả dụng: cần tích hợp render worker/FFmpeg và kho lưu trữ. Chưa có video nào được tạo.", "warning")}><Sparkles size={15}/> Xuất video</button>
+      <button className="export-btn" onClick={requestRender} disabled={renderBusy || (renderJob?.projectId === cloudProjectId && ["queued", "processing"].includes(renderJob?.status || ""))}><Sparkles size={15}/> {renderBusy ? "Đang gửi job…" : renderJob?.projectId === cloudProjectId && ["queued", "processing"].includes(renderJob?.status || "") ? "Render " + renderJob.progress + "%" : "Xuất MP4"}</button>
+      {renderJob?.projectId === cloudProjectId && renderJob.status === "completed" && renderJob.downloadAvailable && <button className="download-btn" onClick={downloadCurrentRender} disabled={downloadBusy}><CloudUpload size={14}/> {downloadBusy ? "Đang tải…" : "Tải MP4"}</button>}
+      {renderJob?.projectId === cloudProjectId && renderJob.status === "failed" && <span className="render-failed-label" title={renderJob.errorMessage || renderJob.errorCode || "Render failed"}>Render lỗi · thử lại</span>}
       <button className="user-puck user-puck-button" title={apiToken ? "Đã đăng nhập: " + userEmail : "Đăng nhập API"} onClick={() => setShowAuth(true)}>{apiToken ? "✓" : "GD"}</button>
     </header>
 
