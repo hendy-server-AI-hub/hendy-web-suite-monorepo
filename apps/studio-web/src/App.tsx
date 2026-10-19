@@ -17,7 +17,7 @@ type Clip = {
   track: number;
   assetId?: string;
 };
-type AssetKind = "video" | "audio" | "subtitle" | "effect";
+type AssetKind = "video" | "audio" | "subtitle" | "image" | "effect";
 type Asset = { icon: typeof FileVideo2; name: string; detail: string; kind: AssetKind; cloudId?: string; mimeType?: string };
 type SavedProject = {
   version: 1;
@@ -324,7 +324,7 @@ export default function App() {
     const track = asset.kind === "audio" ? 2 : asset.kind === "subtitle" ? 1 : selectedClip?.track ?? 0;
     const color: Clip["color"] = asset.kind === "audio" ? "orange" : asset.kind === "subtitle" ? "green" : "blue";
     if (selectedClip) {
-      commitClips(clips.map((clip) => clip.id === selectedClip.id ? { ...clip, name: asset.name, assetId: asset.cloudId, color } : clip));
+      commitClips(clips.map((clip) => clip.id === selectedClip.id ? { ...clip, name: asset.name, assetId: asset.cloudId, color, track } : clip));
       showNotice("Đã thay media clip đang chọn bằng tài nguyên cloud.", "success");
       return;
     }
