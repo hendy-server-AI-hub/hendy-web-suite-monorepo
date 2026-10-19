@@ -37,7 +37,8 @@ async function readJson(request: Request): Promise<{ value: unknown } | { error:
   catch { return { error: "Request body phải là JSON hợp lệ.", status: 400 }; }
 }
 function equalConstantTime(a: string, b: string): boolean { const left = encoder.encode(a); const right = encoder.encode(b); let mismatch = left.length ^ right.length; const length = Math.max(left.length, right.length); for (let i = 0; i < length; i++) mismatch |= (left[i] || 0) ^ (right[i] || 0); return mismatch === 0; }
-async function passwordHash(password: string, salt: Uint8Array): Promise<Uint8Array> { const material = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]); const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations: PBKDF2_ITERATIONS }, material, 256); return new Uint8Array(bits); }
+function arrayBufferCopy(value: Uint8Array): ArrayBuffer { const copy = new Uint8Array(value.byteLength); copy.set(value); return copy.buffer; }
+async function passwordHash(password: string, salt: Uint8Array): Promise<Uint8Array> { const material = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]); const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: arrayBufferCopy(salt), iterations: PBKDF2_ITERATIONS }, material, 256); return new Uint8Array(bits); }
 async function signingKey(secret: string): Promise<CryptoKey> { return crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]); }
 async function issueToken(user: Pick<UserRow, "id" | "email" | "role">, secret: string): Promise<{ token: string; expiresAt: string }> {
   const now = Math.floor(Date.now() / 1000); const claims: Claims = { sub: user.id, email: user.email, role: user.role, iat: now, exp: now + TOKEN_TTL_SECONDS };
@@ -49,7 +50,7 @@ async function issueToken(user: Pick<UserRow, "id" | "email" | "role">, secret: 
 }
 async function verifyToken(token: string, secret: string): Promise<Claims | null> {
   const parts = token.split("."); if (parts.length !== 3) return null;
-  try { const valid = await crypto.subtle.verify("HMAC", await signingKey(secret), fromBase64Url(parts[2]), encoder.encode(parts[0] + "." + parts[1])); if (!valid) return null;
+  try { const valid = await crypto.subtle.verify("HMAC", await signingKey(secret), arrayBufferCopy(fromBase64Url(parts[2])), encoder.encode(parts[0] + "." + parts[1])); if (!valid) return null;
     const claims = JSON.parse(decoder.decode(fromBase64Url(parts[1]))) as Partial<Claims>;
     if (typeof claims.sub !== "string" || typeof claims.email !== "string" || typeof claims.exp !== "number" || claims.exp <= Math.floor(Date.now() / 1000) || !["owner", "admin", "editor", "viewer"].includes(String(claims.role))) return null;
     return claims as Claims;
