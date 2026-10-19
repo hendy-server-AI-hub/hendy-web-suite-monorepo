@@ -164,6 +164,9 @@ async function main() {
   if (token.length < 20) throw new Error("Cloudflare API token có vẻ không hợp lệ.");
   const originInput = await prompt("Production HTTPS origin(s) (phân tách dấu phẩy, ví dụ https://admin.example.com,https://studio.example.com)");
   const origins = validOrigins(originInput);
+  const apiBaseUrl = await prompt("Public HTTPS URL của Hendy Worker API (ví dụ https://hendy-suite-api.ten-tai-khoan.workers.dev)");
+  const apiUrl = new URL(apiBaseUrl);
+  if (apiUrl.protocol !== "https:" || apiUrl.pathname !== "/" || apiUrl.search || apiUrl.hash) throw new Error("API URL phải là HTTPS origin không có path/query.");
 
   console.log("\nĐang xác thực Cloudflare token...");
   const verify = await cfRequest("https://api.cloudflare.com/client/v4/user/tokens/verify", token);
@@ -175,12 +178,15 @@ async function main() {
 
   const jwtSecret = randomBytes(48).toString("base64url");
   const bootstrapKey = randomBytes(32).toString("base64url");
+  const renderServiceToken = randomBytes(48).toString("base64url");
+  const renderWorkerId = "render-" + randomBytes(6).toString("hex");
   const currentEnv = await readFile(ENV_FILE, "utf8").catch(() => "");
   const nextEnv = updateEnvFile(currentEnv, {
     CLOUDFLARE_ACCOUNT_ID: accountId,
     AUTH_JWT_SECRET: jwtSecret,
     BOOTSTRAP_ADMIN_KEY: bootstrapKey,
-    API_BASE_URL: "https://REPLACE_WITH_DEPLOYED_WORKER_URL",
+    RENDER_SERVICE_TOKEN: renderServiceToken,
+    API_BASE_URL: apiBaseUrl,
   });
   await writeFile(ENV_FILE, nextEnv, { mode: 0o600 });
   await chmod(ENV_FILE, 0o600).catch(() => undefined);
@@ -188,12 +194,26 @@ async function main() {
   const configPath = resolve(ROOT, "apps/api/wrangler.toml");
   await writeFile(configPath, createWranglerConfig(databaseId, origins), "utf8");
   console.log("✓ Đã cấu hình apps/api/wrangler.toml (D1, R2, CORS allowlist).");
-  console.log("✓ Đã lưu AUTH_JWT_SECRET và BOOTSTRAP_ADMIN_KEY vào .env.production.local (git-ignored).");
+  console.log("✓ Đã lưu JWT/bootstrap/render secrets vào .env.production.local (git-ignored).");
+  const renderEnv = [
+    "HENDY_API_URL=" + apiBaseUrl,
+    "RENDER_SERVICE_TOKEN=" + renderServiceToken,
+    "RENDER_WORKER_ID=" + renderWorkerId,
+    "POLL_INTERVAL_MS=2000",
+    "JOB_TIMEOUT_MS=2700000",
+    "MAX_INPUT_BYTES=262144000",
+    "MAX_OUTPUT_BYTES=83886080",
+    "",
+  ].join("\n");
+  await writeFile(resolve(ROOT, ".env.render.local"), renderEnv, { mode: 0o600 });
+  await chmod(resolve(ROOT, ".env.render.local"), 0o600).catch(() => undefined);
+  console.log("✓ Đã tạo .env.render.local để chạy render worker bằng Docker.");
 
   await setRepoSecret(repo, "CLOUDFLARE_API_TOKEN", token);
   await setRepoSecret(repo, "CLOUDFLARE_ACCOUNT_ID", accountId);
   await setRepoSecret(repo, "AUTH_JWT_SECRET", jwtSecret);
   await setRepoSecret(repo, "BOOTSTRAP_ADMIN_KEY", bootstrapKey);
+  await setRepoSecret(repo, "RENDER_SERVICE_TOKEN", renderServiceToken);
 
   console.log("\nĐang áp dụng D1 migrations từ cấu hình vừa tạo...");
   const npx = platform === "win32" ? "npx.cmd" : "npx";
@@ -215,6 +235,7 @@ async function main() {
     console.log("Hoặc kiểm tra rồi commit apps/api/wrangler.toml bằng tay.");
   }
   console.log("Tiếp theo: sau khi Worker deploy thành công, chạy npm run bootstrap:admin để tạo tài khoản owner.");
+  console.log("Render service: npm run render:up (hoặc docker compose --env-file .env.render.local -f docker-compose.render.yml up -d --build) trên máy chủ có Docker.");
   console.log("Lưu ý: token Cloudflare không được ghi vào file local; AUTH_JWT_SECRET và BOOTSTRAP_ADMIN_KEY nằm trong file .env.production.local — không chia sẻ file này.");
 }
 

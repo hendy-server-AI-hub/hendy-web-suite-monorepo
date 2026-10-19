@@ -40,7 +40,7 @@ function parseEnv(raw) {
 async function main() {
   const env = parseEnv(await readFile(SECRET_FILE, "utf8"));
   if (!env.BOOTSTRAP_ADMIN_KEY) throw new Error("Không tìm thấy BOOTSTRAP_ADMIN_KEY. Chạy npm run bootstrap:production trước.");
-  const baseUrl = (await prompt("URL deployed Worker API")).replace(/\/+$/, "");
+  const baseUrl = (await prompt("URL deployed Worker API", env.API_BASE_URL || "")).replace(/\/+$/, "");
   const url = new URL(baseUrl);
   if (url.protocol !== "https:" && !["localhost", "127.0.0.1"].includes(url.hostname)) throw new Error("Dùng HTTPS cho API production.");
   const email = (await prompt("Email quản trị viên")).toLowerCase();
