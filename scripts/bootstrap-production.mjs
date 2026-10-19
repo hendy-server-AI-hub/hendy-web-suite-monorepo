@@ -134,7 +134,7 @@ function validOrigins(input) {
   for (const value of list) {
     const url = new URL(value);
     if (url.origin !== value.replace(/\/$/, "")) throw new Error("Chỉ nhập origin, không nhập path: " + value);
-    if (url.protocol !== "https:" && !["localhost", "127.0.0.1"].includes(url.hostname)) throw new Error("Chỉ cho phép HTTPS ở production (localhost được phép): " + value);
+    if (url.protocol !== "https:") throw new Error("Production bootstrap chỉ chấp nhận origin HTTPS: " + value);
   }
   return [...new Set(list)];
 }
@@ -162,7 +162,7 @@ async function main() {
   if (!/^[a-f0-9]{32}$/i.test(accountId)) throw new Error("Account ID phải có 32 ký tự hex.");
   const token = await secretPrompt("Cloudflare API Token");
   if (token.length < 20) throw new Error("Cloudflare API token có vẻ không hợp lệ.");
-  const originInput = await prompt("CORS origin (phân tách dấu phẩy)", "http://localhost:5173,http://localhost:5174");
+  const originInput = await prompt("Production HTTPS origin(s) (phân tách dấu phẩy, ví dụ https://admin.example.com,https://studio.example.com)");
   const origins = validOrigins(originInput);
 
   console.log("\nĐang xác thực Cloudflare token...");
