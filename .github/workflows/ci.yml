@@ -32,5 +32,7 @@ jobs:
         run: npm run check:structure
       - name: Typecheck all workspaces
         run: npm run typecheck
+      - name: API smoke tests
+        run: npm run test:api
       - name: Build all apps and Worker
         run: npm run build
