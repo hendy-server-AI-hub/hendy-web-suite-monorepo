@@ -61,7 +61,7 @@ async function authenticate(request: Request, env: Env): Promise<Claims | null> 
   const match = (request.headers.get("authorization") || "").match(/^Bearer\s+(.+)$/i); if (!match) return null;
   const claims = await verifyToken(match[1], env.AUTH_JWT_SECRET); if (!claims) return null;
   const user = await env.DB.prepare("SELECT id,email,role,status FROM users WHERE id = ? LIMIT 1").bind(claims.sub).first<UserRow>();
-  return user && user.status === "active" && user.email === claims.email ? claims : null;
+  return user && user.status === "active" && user.email === claims.email && user.role === claims.role ? claims : null;
 }
 function validateManifest(input: unknown): { valid: true; manifest: RenderManifest } | { valid: false; reason: string } {
   const data = asRecord(input); if (!data) return { valid: false, reason: "Body phải là JSON object." };
@@ -183,11 +183,14 @@ async function route(request: Request, env: Env, requestId: string, headers: Rec
     }
     if (path === "/api/v1/assets" && method === "POST") {
       if (!env.ASSETS) return fail("OBJECT_STORAGE_NOT_CONFIGURED", "R2 chưa được khai báo. Chạy npm run bootstrap:production.", requestId, 503, headers);
+      if (Number(request.headers.get("content-length") || "0") > MAX_UPLOAD_BYTES + 100_000) return fail("FILE_TOO_LARGE", "Giới hạn upload hiện tại là 20 MB mỗi file.", requestId, 413, headers);
       if (!(request.headers.get("content-type") || "").toLowerCase().startsWith("multipart/form-data")) return fail("UNSUPPORTED_UPLOAD", "Upload dùng multipart/form-data với trường file.", requestId, 415, headers);
       let form: FormData; try { form = await request.formData(); } catch { return fail("INVALID_UPLOAD", "Không đọc được multipart upload.", requestId, 400, headers); }
       const file = form.get("file"); if (!(file instanceof File) || file.size <= 0) return fail("INVALID_UPLOAD", "Thiếu file hoặc file rỗng.", requestId, 422, headers);
       if (file.size > MAX_UPLOAD_BYTES) return fail("FILE_TOO_LARGE", "Giới hạn upload hiện tại là 20 MB mỗi file.", requestId, 413, headers);
-      const mime = (file.type || "application/octet-stream").toLowerCase();
+      const extension = file.name.split(".").pop()?.toLowerCase() || "";
+      const inferredMime: Record<string, string> = { mp4: "video/mp4", webm: "video/webm", mov: "video/quicktime", mkv: "video/x-matroska", mp3: "audio/mpeg", m4a: "audio/mp4", wav: "audio/wav", ogg: "audio/ogg", flac: "audio/flac", aac: "audio/aac", srt: "application/x-subrip", vtt: "text/vtt", jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp" };
+      const mime = (file.type || inferredMime[extension] || "application/octet-stream").toLowerCase();
       if (!allowedMime(mime)) return fail("UNSUPPORTED_MEDIA_TYPE", "Định dạng được hỗ trợ: video, audio, phụ đề và ảnh phổ biến.", requestId, 415, headers);
       const assetId = newId(); const fileName = safeFileName(file.name); const objectKey = user.sub + "/" + assetId; const bytes = await file.arrayBuffer();
       try {
