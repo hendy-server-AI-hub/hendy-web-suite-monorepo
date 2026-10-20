@@ -20,7 +20,8 @@ function parseOrigin(name, value) {
   let url;
   try { url = new URL(value); }
   catch { throw new Error(name + " is missing or not a valid URL."); }
-  if (url.protocol !== "https:" || url.origin !== value.replace(/\\/$/, "") || url.username || url.password) {
+  const canonicalValue = value.endsWith("/") ? value.slice(0, -1) : value;
+  if (url.protocol !== "https:" || url.origin !== canonicalValue || url.username || url.password) {
     throw new Error(name + " must be an HTTPS origin without path, query, hash or credentials.");
   }
   return url.origin;
