@@ -95,6 +95,31 @@ async function ensureR2(accountId, token) {
   await cfRequest(endpoint, token, "POST", { name: BUCKET_NAME });
   console.log("✓ Đã tạo R2 bucket: " + BUCKET_NAME);
 }
+async function ensurePages(accountId, token) {
+  const endpoint = "https://api.cloudflare.com/client/v4/accounts/" + accountId + "/pages/projects";
+  const result = await cfRequest(endpoint + "?page=1&per_page=100", token);
+  const projects = Array.isArray(result) ? result : (Array.isArray(result?.projects) ? result.projects : []);
+  const required = [
+    { name: "hendy-admin-web", label: "Admin Web" },
+    { name: "hendy-studio-web", label: "Studio Web" },
+    { name: "hendy-public-site", label: "Public Site" },
+  ];
+  const origins = [];
+  for (const requiredProject of required) {
+    let project = projects.find((item) => item.name === requiredProject.name);
+    if (!project) {
+      project = await cfRequest(endpoint, token, "POST", { name: requiredProject.name, production_branch: "main" });
+      console.log("Created Cloudflare Pages project: " + requiredProject.name);
+    } else {
+      console.log("Cloudflare Pages project exists: " + requiredProject.name);
+    }
+    const subdomain = typeof project.subdomain === "string" && project.subdomain
+      ? project.subdomain
+      : requiredProject.name + ".pages.dev";
+    origins.push("https://" + subdomain.replace(/^https?:\\/\\//i, "").replace(/\\/+$/, ""));
+  }
+  return origins;
+}
 async function setRepoSecret(repo, name, value) {
   command("gh", ["secret", "set", name, "--repo", repo], { input: value });
   console.log("✓ Đã đặt GitHub Actions secret: " + name);
@@ -166,8 +191,6 @@ async function main() {
   if (!/^[a-f0-9]{32}$/i.test(accountId)) throw new Error("Account ID phải có 32 ký tự hex.");
   const token = await secretPrompt("Cloudflare API Token");
   if (token.length < 20) throw new Error("Cloudflare API token có vẻ không hợp lệ.");
-  const originInput = await prompt("Production HTTPS origin(s) (phân tách dấu phẩy, ví dụ https://admin.example.com,https://studio.example.com)");
-  const origins = validOrigins(originInput);
   const apiBaseUrl = await prompt("Public HTTPS URL của Hendy Worker API (ví dụ https://hendy-suite-api.ten-tai-khoan.workers.dev)");
   const apiUrl = new URL(apiBaseUrl);
   if (apiUrl.protocol !== "https:" || apiUrl.pathname !== "/" || apiUrl.search || apiUrl.hash) throw new Error("API URL phải là HTTPS origin không có path/query.");
@@ -179,6 +202,8 @@ async function main() {
 
   const databaseId = await ensureD1(accountId, token);
   await ensureR2(accountId, token);
+  const origins = validOrigins((await ensurePages(accountId, token)).join(","));
+  console.log("Cloudflare Pages origins: " + origins.join(", "));
 
   const jwtSecret = randomBytes(48).toString("base64url");
   const bootstrapKey = randomBytes(32).toString("base64url");
