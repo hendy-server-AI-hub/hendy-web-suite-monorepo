@@ -96,6 +96,36 @@ async function ensureR2(accountId, token) {
   await cfRequest(endpoint, token, "POST", { name: BUCKET_NAME });
   console.log("✓ Đã tạo R2 bucket: " + BUCKET_NAME);
 }
+async function ensureWorkersSubdomain(accountId, token) {
+  const endpoint = "https://api.cloudflare.com/client/v4/accounts/" + accountId + "/workers/subdomain";
+  try {
+    const current = await cfRequest(endpoint, token);
+    if (typeof current?.subdomain === "string" && current.subdomain) {
+      console.log("✓ Workers.dev subdomain đã có: " + current.subdomain + ".workers.dev");
+      return current.subdomain;
+    }
+  } catch {
+    // A fresh account may not have a workers.dev subdomain yet. Try the explicit create path below.
+  }
+
+  const subdomain = (await prompt("Chưa có workers.dev subdomain. Nhập slug muốn tạo (chỉ chữ thường, số và dấu gạch ngang)")).toLowerCase();
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(subdomain)) {
+    throw new Error("Workers.dev subdomain slug không hợp lệ.");
+  }
+  const created = await cfRequest(endpoint, token, "PUT", { subdomain });
+  if (typeof created?.subdomain !== "string" || !created.subdomain) {
+    throw new Error("Cloudflare không trả về workers.dev subdomain sau khi tạo.");
+  }
+  console.log("✓ Đã tạo Workers.dev subdomain: " + created.subdomain + ".workers.dev");
+  return created.subdomain;
+}
+function validateApiOrigin(value) {
+  const url = new URL(value);
+  if (url.protocol !== "https:" || url.pathname !== "/" || url.search || url.hash || url.username || url.password) {
+    throw new Error("API URL phải là HTTPS origin không có path/query/credentials.");
+  }
+  return url.origin;
+}
 async function ensurePages(accountId, token) {
   const endpoint = "https://api.cloudflare.com/client/v4/accounts/" + accountId + "/pages/projects";
   const result = await cfRequest(endpoint + "?page=1&per_page=100", token);
@@ -207,16 +237,27 @@ async function main() {
 
   const accountId = await prompt("Cloudflare Account ID");
   if (!/^[a-f0-9]{32}$/i.test(accountId)) throw new Error("Account ID phải có 32 ký tự hex.");
+  if (currentEnvValues.CLOUDFLARE_ACCOUNT_ID && currentEnvValues.CLOUDFLARE_ACCOUNT_ID !== accountId) {
+    const switchConfirmation = await prompt("Local production env đang gắn với Cloudflare Account ID khác. Type SWITCH_ACCOUNT để chuyển tài khoản");
+    if (switchConfirmation !== "SWITCH_ACCOUNT") throw new Error("Cloudflare account switch canceled.");
+  }
   const token = await secretPrompt("Cloudflare API Token");
   if (token.length < 20) throw new Error("Cloudflare API token có vẻ không hợp lệ.");
-  const apiBaseUrl = await prompt("Public HTTPS URL của Hendy Worker API (ví dụ https://hendy-suite-api.ten-tai-khoan.workers.dev)");
-  const apiUrl = new URL(apiBaseUrl);
-  if (apiUrl.protocol !== "https:" || apiUrl.pathname !== "/" || apiUrl.search || apiUrl.hash) throw new Error("API URL phải là HTTPS origin không có path/query.");
 
   console.log("\nĐang xác thực Cloudflare token...");
   const verify = await cfRequest("https://api.cloudflare.com/client/v4/user/tokens/verify", token);
   if (verify?.status && verify.status !== "active") throw new Error("Cloudflare API token không active.");
   console.log("✓ Cloudflare token hợp lệ.");
+
+  const promptedApiUrl = await prompt("Public HTTPS URL của Hendy Worker API (để trống để tự suy ra từ workers.dev subdomain)");
+  let apiBaseUrl;
+  if (promptedApiUrl) {
+    apiBaseUrl = validateApiOrigin(promptedApiUrl);
+  } else {
+    const subdomain = await ensureWorkersSubdomain(accountId, token);
+    apiBaseUrl = "https://hendy-suite-api." + subdomain + ".workers.dev";
+    console.log("✓ API URL được suy ra tự động: " + apiBaseUrl);
+  }
 
   const databaseId = await ensureD1(accountId, token);
   await ensureR2(accountId, token);

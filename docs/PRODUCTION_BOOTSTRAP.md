@@ -19,7 +19,7 @@ npm install
 npm run bootstrap:production:push
 \`\`\`
 
-The script prompts for the repository, Cloudflare Account ID, hidden Cloudflare token entry, HTTPS app origins and Worker API URL. It is designed for reruns: existing secrets are reused from the local-only `.env.production.local`; if GitHub has a managed secret but that local value has been lost, the script stops instead of silently rotating it. Pure helper tests run in CI with `npm run test:bootstrap`. It then:
+The script prompts for the repository, Cloudflare Account ID, hidden Cloudflare token entry and Worker API URL. You can paste an existing HTTPS Worker/API origin, or leave the API URL blank to auto-detect the account's workers.dev subdomain; if none exists, the script asks for a slug and creates it. It also asks for `SWITCH_ACCOUNT` if the entered Cloudflare Account ID differs from the local production config. It is designed for reruns: existing secrets are reused from the local-only `.env.production.local`; if GitHub has a managed secret but that local value has been lost, the script stops instead of silently rotating it. Pure helper tests run in CI with `npm run test:bootstrap`. It then:
 
 1. Validates the Cloudflare API token.
 2. Creates the D1 database hendy-suite-db and R2 bucket hendy-suite-assets if absent.

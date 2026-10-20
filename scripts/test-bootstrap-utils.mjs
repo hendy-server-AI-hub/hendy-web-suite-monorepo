@@ -10,7 +10,7 @@ const updated = updateEnvFile("A=1\nAUTH_JWT_SECRET=old\n# retained as a comment
   AUTH_JWT_SECRET: "replacement",
   NEW_VALUE: "safe-value",
 });
-assert.deepEqual({ ...parseEnvFile(updated) }, { A: "1", AUTH_JWT_SECRET: "replacement", NEW_VALUE: "safe-value" });
+assert.deepEqual(parseEnvFile(updated), { A: "1", AUTH_JWT_SECRET: "replacement", NEW_VALUE: "safe-value" });
 assert.throws(() => updateEnvFile("", { BAD: "line1\nline2" }), /single-line/);
 
 const reusableValues = {
