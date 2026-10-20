@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: hendy-video-studio
+    runtime: docker
+    plan: starter
+    region: singapore
+    branch: render-rewrite
+    dockerfilePath: ./render-app/Dockerfile
+    dockerContext: ./render-app
+    healthCheckPath: /health
+    autoDeployTrigger: checksPass
+    disk:
+      name: hendy-video-data
+      mountPath: /var/data
+      sizeGB: 10
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATA_DIR
+        value: /var/data
+      - key: MAX_UPLOAD_MB
+        value: "500"
