@@ -1,50 +1,21 @@
 {
-  "name": "hendy-suite-monorepo",
-  "version": "1.0.0",
+  "name": "hendy-control-suite",
+  "version": "2.0.0",
   "private": true,
-  "description": "Hendy Web Suite monorepo: admin, studio, public site and Cloudflare Worker API",
-  "workspaces": [
-    "apps/admin-web",
-    "apps/studio-web",
-    "apps/site",
-    "apps/api",
-    "packages/core-utils",
-    "packages/shared-types"
-  ],
+  "type": "module",
+  "description": "Clean rewrite of Hendy Control Suite.",
+  "engines": { "node": ">=22.0.0", "npm": ">=10.0.0" },
   "scripts": {
-    "dev:admin": "npm run dev --workspace=@hendy/admin-web",
-    "dev:studio": "npm run dev --workspace=@hendy/studio-web",
-    "dev:site": "npm run dev --workspace=@hendy/site",
-    "dev:api": "npm run dev --workspace=@hendy/api",
-    "typecheck": "npm run typecheck:packages && npm run typecheck:apps && npm run typecheck:api",
-    "typecheck:packages": "npm run typecheck --workspace=@hendy/shared-types && npm run typecheck --workspace=@hendy/core-utils",
-    "typecheck:apps": "npm run typecheck --workspace=@hendy/admin-web && npm run typecheck --workspace=@hendy/studio-web && npm run typecheck --workspace=@hendy/site",
-    "typecheck:api": "npm run typecheck --workspace=@hendy/api",
-    "build:admin": "npm run build --workspace=@hendy/admin-web",
-    "build:studio": "npm run build --workspace=@hendy/studio-web",
-    "build:site": "npm run build --workspace=@hendy/site",
-    "build:api": "npm run build --workspace=@hendy/api",
-    "build": "npm run typecheck && npm run build:admin && npm run build:studio && npm run build:site && npm run build:api",
-    "check:structure": "node scripts/check-structure.mjs",
-    "clean": "node scripts/clean.mjs",
+    "check": "npm run check:syntax && npm test",
+    "check:syntax": "node --check apps/api/src/index.js && node --check apps/api/src/validation.js && node --check scripts/bootstrap-production.mjs && node --check scripts/bootstrap-admin.mjs && node --check scripts/check-production-config.mjs && node --check scripts/render-pages-config.mjs && node --check services/render-worker/src/index.mjs && node --check apps/admin-web/app.js && node --check apps/studio-web/app.js",
+    "test": "node --test test/*.test.mjs",
     "bootstrap:production": "node scripts/bootstrap-production.mjs",
-    "bootstrap:admin": "node scripts/bootstrap-admin.mjs",
     "bootstrap:production:push": "node scripts/bootstrap-production.mjs --push",
-    "test:api": "node scripts/test-api-smoke.mjs",
+    "bootstrap:admin": "node scripts/bootstrap-admin.mjs",
+    "check:production-config": "node scripts/check-production-config.mjs",
     "render:check": "node --check services/render-worker/src/index.mjs",
     "render:up": "docker compose --env-file .env.render.local -f docker-compose.render.yml up -d --build",
     "render:logs": "docker compose --env-file .env.render.local -f docker-compose.render.yml logs -f --tail=200",
-    "render:down": "docker compose --env-file .env.render.local -f docker-compose.render.yml down",
-    "check:scripts": "node --check scripts/bootstrap-utils.mjs && node --check scripts/test-bootstrap-utils.mjs && node --check scripts/bootstrap-production.mjs && node --check scripts/bootstrap-admin.mjs && node --check scripts/test-api-smoke.mjs && node --check scripts/check-structure.mjs && node --check scripts/clean.mjs && node --check scripts/check-production-config.mjs",
-    "check:production-config": "node scripts/check-production-config.mjs --production",
-    "test:bootstrap": "node scripts/test-bootstrap-utils.mjs"
-  },
-  "devDependencies": {
-    "@types/node": "^22.15.30",
-    "typescript": "^5.9.2"
-  },
-  "engines": {
-    "node": ">=20.19.0",
-    "npm": ">=10.8.0"
+    "render:down": "docker compose --env-file .env.render.local -f docker-compose.render.yml down"
   }
 }

@@ -1,25 +1,24 @@
-name = "hendy-suite-api"
-main = "src/index.ts"
+name = "hendy-control-api"
+main = "src/index.js"
 compatibility_date = "2026-10-01"
 workers_dev = true
 
 [vars]
-APP_NAME = "Hendy Suite API"
-APP_VERSION = "1.1.0"
-APP_ENV = "production"
-# Bootstrap replaces this local allowlist with the actual HTTPS app origins.
-CORS_ORIGIN = "http://localhost:5173,http://localhost:5174"
+APP_NAME = "Hendy Control API"
+APP_VERSION = "2.0.0"
+APP_ENV = "development"
+CORS_ORIGINS = "http://localhost:5173,http://localhost:5174,http://localhost:5175"
 
-# Optional in a fresh checkout. Run npm run bootstrap:production to create these bindings.
+# Generated with npm run bootstrap:production. Never put secrets here.
 # [[d1_databases]]
 # binding = "DB"
-# database_name = "hendy-suite-db"
-# database_id = "REPLACE_WITH_REAL_D1_DATABASE_ID"
+# database_name = "hendy-control-db"
+# database_id = "REPLACE_WITH_REAL_DATABASE_ID"
 # migrations_dir = "migrations"
 
 # [[r2_buckets]]
 # binding = "ASSETS"
-# bucket_name = "hendy-suite-assets"
+# bucket_name = "hendy-control-assets"
 
 [observability]
 enabled = true
