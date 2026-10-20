@@ -1,0 +1,44 @@
+name: Build and publish Render Worker image
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "services/render-worker/**"
+      - "docker-compose.render.yml"
+      - ".github/workflows/publish-render-worker.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: hendy-render-image
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm run render:check
+      - uses: docker/setup-buildx-action@v3
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and publish
+        uses: docker/build-push-action@v6
+        with:
+          context: services/render-worker
+          file: services/render-worker/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/hendy-server-ai-hub/hendy-control-suite-render-worker:latest
+            ghcr.io/hendy-server-ai-hub/hendy-control-suite-render-worker:sha-${{ github.sha }}

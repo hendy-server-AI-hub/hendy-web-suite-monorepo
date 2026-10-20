@@ -1,0 +1,50 @@
+name: Clean Rewrite CI
+
+on:
+  push:
+    branches: ["main", "rewrite/**"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clean-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Syntax, unit tests and source validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Validate JavaScript syntax
+        run: npm run check:syntax
+      - name: Run unit tests
+        run: npm test
+      - name: Validate FFmpeg worker
+        run: npm run render:check
+      - name: Validate compose file
+        run: |
+          if command -v docker >/dev/null 2>&1; then
+            docker compose --env-file .env.render.example -f docker-compose.render.yml config --quiet
+          else
+            echo "Docker not present on this CI runner; compose validation skipped."
+          fi
+      - name: Validate required source files
+        run: |
+          test -s apps/api/src/index.js
+          test -s apps/api/migrations/0001_schema.sql
+          test -s apps/admin-web/index.html
+          test -s apps/studio-web/index.html
+          test -s apps/site/index.html
+          test -s services/render-worker/src/index.mjs
+          test -s scripts/bootstrap-production.mjs
