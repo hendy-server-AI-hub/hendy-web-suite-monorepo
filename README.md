@@ -8,7 +8,7 @@ Monorepo chứa Admin Web, Studio Web, public site, Cloudflare Worker API và wo
 
 - Node.js 22+, npm 10.8+
 - GitHub CLI (gh) để tự khai báo GitHub Actions secrets
-- Cloudflare account có quyền tạo Workers, D1 và R2
+- Cloudflare API token có quyền Pages Write, Workers Scripts Edit, D1 Edit và R2 Storage Edit
 - Docker + Docker Compose trên máy chủ render FFmpeg
 
 ## Chạy giao diện/API local
