@@ -180,7 +180,7 @@ function updateEnvFile(existing, additions) {
 
 async function main() {
   console.log("\nHendy Suite — production bootstrap");
-  console.log("Script sẽ tạo D1/R2 nếu chưa có, cấu hình wrangler.toml và khai báo GitHub Actions secrets.");
+  console.log("Script sẽ tạo D1/R2/Pages nếu chưa có, cấu hình Worker, sinh secrets và khai báo GitHub Actions secrets/variables.");
   console.log("Không đưa token vào source code, file cấu hình commit hoặc log.\n");
 
   const repo = await prompt("GitHub repository (owner/name)", REPO_DEFAULT);
