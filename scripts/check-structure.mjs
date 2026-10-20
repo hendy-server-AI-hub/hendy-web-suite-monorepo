@@ -7,6 +7,7 @@ const required = [
   "apps/api/src/index.ts", "apps/api/wrangler.toml",
   "packages/core-utils/src/index.ts", "packages/shared-types/src/index.ts",
   "mobile_app/README.md", "scripts/README.md", "installer/HendyTools.iss",
+  "scripts/bootstrap-utils.mjs", "scripts/test-bootstrap-utils.mjs", "scripts/check-production-config.mjs",
   "hendy_tools_pro.py", "requirements.txt", ".npmrc", "tsconfig.json", "package.json"
 ];
 const missing = required.filter(path => !existsSync(join(process.cwd(), path)));

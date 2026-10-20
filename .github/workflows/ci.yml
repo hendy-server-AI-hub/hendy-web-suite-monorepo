@@ -32,6 +32,8 @@ jobs:
         run: npm run check:structure
       - name: Check bootstrap and utility scripts
         run: npm run check:scripts
+      - name: Unit test bootstrap secret handling
+        run: npm run test:bootstrap
       - name: Typecheck all workspaces
         run: npm run typecheck
       - name: API smoke tests

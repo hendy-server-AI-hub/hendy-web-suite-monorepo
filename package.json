@@ -35,8 +35,9 @@
     "render:up": "docker compose --env-file .env.render.local -f docker-compose.render.yml up -d --build",
     "render:logs": "docker compose --env-file .env.render.local -f docker-compose.render.yml logs -f --tail=200",
     "render:down": "docker compose --env-file .env.render.local -f docker-compose.render.yml down",
-    "check:scripts": "node --check scripts/bootstrap-production.mjs && node --check scripts/bootstrap-admin.mjs && node --check scripts/test-api-smoke.mjs && node --check scripts/check-structure.mjs && node --check scripts/clean.mjs && node --check scripts/check-production-config.mjs",
-    "check:production-config": "node scripts/check-production-config.mjs --production"
+    "check:scripts": "node --check scripts/bootstrap-utils.mjs && node --check scripts/test-bootstrap-utils.mjs && node --check scripts/bootstrap-production.mjs && node --check scripts/bootstrap-admin.mjs && node --check scripts/test-api-smoke.mjs && node --check scripts/check-structure.mjs && node --check scripts/clean.mjs && node --check scripts/check-production-config.mjs",
+    "check:production-config": "node scripts/check-production-config.mjs --production",
+    "test:bootstrap": "node scripts/test-bootstrap-utils.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.15.30",

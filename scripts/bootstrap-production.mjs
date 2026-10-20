@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { parseEnvFile, updateEnvFile, resolveManagedSecrets } from "./bootstrap-utils.mjs";
 import { spawnSync } from "node:child_process";
 import { chmod, readFile, writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
@@ -168,19 +169,6 @@ function validOrigins(input) {
   }
   return [...new Set(list)];
 }
-function parseEnvFile(existing) {
-  const values = {};
-  for (const line of existing.split(/\r?\n/)) {
-    const match = line.match(/^([A-Z0-9_]+)=(.*)$/);
-    if (match) values[match[1]] = match[2];
-  }
-  return values;
-}
-function updateEnvFile(existing, additions) {
-  const values = parseEnvFile(existing);
-  for (const [key, value] of Object.entries(additions)) values[key] = value;
-  return Object.entries(values).map(([key, value]) => key + "=" + value).join("\n") + "\n";
-}
 function existingSecretNames(repo) {
   const output = command("gh", ["secret", "list", "--repo", repo, "--json", "name", "--limit", "100"], { capture: true });
   let rows;
@@ -202,19 +190,20 @@ async function main() {
   const currentEnvRaw = await readFile(ENV_FILE, "utf8").catch(() => "");
   const currentEnvValues = parseEnvFile(currentEnvRaw);
   const remoteSecretNames = existingSecretNames(repo);
-  const managedSecretNames = ["AUTH_JWT_SECRET", "BOOTSTRAP_ADMIN_KEY", "RENDER_SERVICE_TOKEN"];
   if (rotateSecrets) {
     const confirmation = await prompt("Secret rotation invalidates current API sessions and requires render worker reconfiguration. Type ROTATE to continue");
     if (confirmation !== "ROTATE") throw new Error("Secret rotation canceled.");
-  } else {
-    const missingLocalSecrets = managedSecretNames.filter((name) => remoteSecretNames.has(name) && !currentEnvValues[name]);
-    if (missingLocalSecrets.length) {
-      throw new Error(
-        "GitHub đã có secret nhưng máy này không có bản local để tái sử dụng: " + missingLocalSecrets.join(", ") +
-        ". Để tránh vô tình ghi đè secret production, hãy khôi phục .env.production.local từ bản backup an toàn hoặc chạy có chủ đích: npm run bootstrap:production -- --rotate-secrets"
-      );
-    }
   }
+  const managedSecrets = resolveManagedSecrets({
+    localValues: currentEnvValues,
+    remoteSecretNames,
+    rotateSecrets,
+    generators: {
+      AUTH_JWT_SECRET: () => randomBytes(48).toString("base64url"),
+      BOOTSTRAP_ADMIN_KEY: () => randomBytes(32).toString("base64url"),
+      RENDER_SERVICE_TOKEN: () => randomBytes(48).toString("base64url"),
+    },
+  });
 
   const accountId = await prompt("Cloudflare Account ID");
   if (!/^[a-f0-9]{32}$/i.test(accountId)) throw new Error("Account ID phải có 32 ký tự hex.");
@@ -236,12 +225,7 @@ async function main() {
 
   // Keep existing application secrets stable on reruns. Rotating them is an explicit,
   // destructive operation because it invalidates issued JWT sessions and the remote render worker token.
-  const jwtSecret = !rotateSecrets && currentEnvValues.AUTH_JWT_SECRET
-    ? currentEnvValues.AUTH_JWT_SECRET : randomBytes(48).toString("base64url");
-  const bootstrapKey = !rotateSecrets && currentEnvValues.BOOTSTRAP_ADMIN_KEY
-    ? currentEnvValues.BOOTSTRAP_ADMIN_KEY : randomBytes(32).toString("base64url");
-  const renderServiceToken = !rotateSecrets && currentEnvValues.RENDER_SERVICE_TOKEN
-    ? currentEnvValues.RENDER_SERVICE_TOKEN : randomBytes(48).toString("base64url");
+  const { AUTH_JWT_SECRET: jwtSecret, BOOTSTRAP_ADMIN_KEY: bootstrapKey, RENDER_SERVICE_TOKEN: renderServiceToken } = managedSecrets;
   const renderWorkerId = currentEnvValues.RENDER_WORKER_ID || ("render-" + randomBytes(6).toString("hex"));
   const nextEnv = updateEnvFile(currentEnvRaw, {
     CLOUDFLARE_ACCOUNT_ID: accountId,
