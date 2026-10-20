@@ -1,0 +1,1 @@
+{"name":"hendy-video-studio-render","version":"1.0.0","private":true,"type":"module","engines":{"node":">=20"},"scripts":{"start":"node server.js","check":"node --check server.js && node --check public/app.js"},"dependencies":{"express":"^5.1.0","helmet":"^8.1.0","multer":"^2.0.2"}}
