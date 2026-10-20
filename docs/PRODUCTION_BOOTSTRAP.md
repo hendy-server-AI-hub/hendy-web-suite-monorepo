@@ -28,7 +28,7 @@ The script prompts for the repository, Cloudflare Account ID, hidden Cloudflare 
 5. Writes real D1/R2 bindings and a CORS allowlist to apps/api/wrangler.toml.
 6. Sets GitHub Actions secrets with gh secret set via stdin, not command-line arguments, and creates/updates non-sensitive GitHub Actions variables.
 7. Writes ignored local-only .env.production.local and .env.render.local files with restrictive permissions; the Cloudflare API token is not written to disk.
-8. Applies remote D1 migrations and, with the :push variant, commits/pushes only apps/api/wrangler.toml to main.
+8. Applies remote D1 migrations and, with the :push variant, commits/pushes only apps/api/wrangler.toml to main. If the config is already unchanged, it manually triggers the Worker deployment workflow so a deliberate secret rotation still reaches the deployed Worker.
 
 To deliberately rotate application secrets, use:
 
