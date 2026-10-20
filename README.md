@@ -94,3 +94,8 @@ Auth sử dụng PBKDF2-HMAC-SHA256 với salt ngẫu nhiên, Bearer JWT HS256 h
 ## Trước khi mở public
 
 Cấu hình Cloudflare WAF/rate limits, alert/monitoring, backup/restore, account recovery/MFA, quota/billing và review bảo mật. Dashboard activity vẫn là demo; analytics/finance/user management chưa được tích hợp đầy đủ. Kiểm thử luồng end-to-end với Cloudflare account thật và Docker host trước khi tuyên bố hệ thống production-ready. Xem docs/PRODUCTION_BOOTSTRAP.md để biết các bước chi tiết.
+
+
+## Frontend production hosting
+
+The production bootstrap also creates the Cloudflare Pages projects `hendy-admin-web`, `hendy-studio-web`, and `hendy-public-site`. After `npm run bootstrap:production:push`, the `.github/workflows/deploy-cloudflare-pages.yml` workflow builds and publishes all three apps from `main`. It stores their `*.pages.dev` URLs and the Worker API URL in GitHub Actions Variables. Optional custom domains can be attached later in Cloudflare Pages and require updating those variables and Worker CORS origins.
