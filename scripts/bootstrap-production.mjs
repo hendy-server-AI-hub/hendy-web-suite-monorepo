@@ -116,7 +116,8 @@ async function ensurePages(accountId, token) {
     const subdomain = typeof project.subdomain === "string" && project.subdomain
       ? project.subdomain
       : requiredProject.name + ".pages.dev";
-    origins.push("https://" + subdomain.replace(/^https?:\\/\\//i, "").replace(/\\/+$/, ""));
+    const cleanSubdomain = subdomain.replace("https://", "").replace("http://", "").replaceAll("/", "");
+    origins.push("https://" + cleanSubdomain);
   }
   return origins;
 }
