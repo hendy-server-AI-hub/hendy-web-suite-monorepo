@@ -99,6 +99,10 @@ async function setRepoSecret(repo, name, value) {
   command("gh", ["secret", "set", name, "--repo", repo], { input: value });
   console.log("✓ Đã đặt GitHub Actions secret: " + name);
 }
+async function setRepoVariable(repo, name, value) {
+  command("gh", ["variable", "set", name, "--repo", repo, "--body", value]);
+  console.log("✓ Đã khai báo GitHub Actions variable: " + name);
+}
 function quoteToml(value) { return JSON.stringify(value); }
 function createWranglerConfig(databaseId, origins) {
   return [
@@ -214,6 +218,10 @@ async function main() {
   await setRepoSecret(repo, "AUTH_JWT_SECRET", jwtSecret);
   await setRepoSecret(repo, "BOOTSTRAP_ADMIN_KEY", bootstrapKey);
   await setRepoSecret(repo, "RENDER_SERVICE_TOKEN", renderServiceToken);
+  await setRepoVariable(repo, "VITE_API_BASE_URL", apiBaseUrl);
+  await setRepoVariable(repo, "VITE_ADMIN_URL", origins[0]);
+  await setRepoVariable(repo, "VITE_STUDIO_URL", origins[1] || origins[0]);
+  await setRepoVariable(repo, "VITE_SITE_URL", origins[2] || origins[0]);
 
   console.log("\nĐang áp dụng D1 migrations từ cấu hình vừa tạo...");
   const npx = platform === "win32" ? "npx.cmd" : "npx";
