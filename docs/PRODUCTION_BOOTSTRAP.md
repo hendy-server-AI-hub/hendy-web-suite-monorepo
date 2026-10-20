@@ -6,7 +6,7 @@ This is a production-oriented foundation, not a claim that every external servic
 
 - Node.js 22+, Git, Docker + Docker Compose, GitHub CLI (gh)
 - gh auth login under an account that can push to main and write repository Actions secrets
-- Cloudflare API token scoped to the intended account with Workers Scripts: Edit, D1: Edit and R2 Storage: Edit
+- Cloudflare API token scoped to the intended account with Pages Write, Workers Scripts: Edit, D1: Edit and R2 Storage: Edit
 - Cloudflare Account ID, public HTTPS application origins and the intended public Worker API URL
 - A Docker host with network access to the Worker API to run FFmpeg
 
@@ -77,3 +77,16 @@ Project/asset endpoints use D1 and private R2. Viewer accounts are read-only. Pa
 ## Before exposing to the public
 
 Configure Cloudflare rate limiting/WAF, monitoring/alerts, backup/restore tests, incident handling, account recovery/MFA and quota/billing controls. The Admin activity feed is demo data; real metrics, finance, user management and AI processing are not fully integrated. The original Flutter/Python/Windows installer source packages were not in the supplied archive and must be restored from their originals. Run a security review, end-to-end tests and verify actual Cloudflare deployment before calling the complete product production-ready.
+
+
+## Cloudflare Pages frontend hosting
+
+The bootstrap provisions these static-hosting projects if they do not exist:
+
+- `hendy-admin-web`
+- `hendy-studio-web`
+- `hendy-public-site`
+
+Their current `*.pages.dev` origins become the Worker CORS allowlist and these GitHub Actions variables: `VITE_ADMIN_URL`, `VITE_STUDIO_URL`, `VITE_SITE_URL`, `VITE_API_BASE_URL`. The `.github/workflows/deploy-cloudflare-pages.yml` workflow builds and deploys all three applications when relevant paths change on `main`; the initial push of `apps/api/wrangler.toml` also triggers a Pages build/deployment after bootstrap.
+
+Custom domains are not automatically registered by the bootstrap. Attach them in Cloudflare Pages after the initial deploy, then update those GitHub variables and Worker CORS origins to match the final HTTPS origins.
