@@ -23,11 +23,20 @@ The script prompts for the repository, Cloudflare Account ID, hidden Cloudflare 
 
 1. Validates the Cloudflare API token.
 2. Creates the D1 database hendy-suite-db and R2 bucket hendy-suite-assets if absent.
-3. Generates independent cryptographic secrets for AUTH_JWT_SECRET, BOOTSTRAP_ADMIN_KEY and RENDER_SERVICE_TOKEN.
-4. Writes real D1/R2 bindings and a CORS allowlist to apps/api/wrangler.toml.
-5. Sets GitHub Actions secrets with gh secret set via stdin, not command-line arguments.
-6. Writes ignored local-only .env.production.local and .env.render.local files with restrictive permissions; the Cloudflare API token is not written to disk.
-7. Applies remote D1 migrations and, with the :push variant, commits/pushes only apps/api/wrangler.toml to main.
+3. Generates independent cryptographic secrets for AUTH_JWT_SECRET, BOOTSTRAP_ADMIN_KEY and RENDER_SERVICE_TOKEN on first setup.
+4. On reruns, preserves those three secrets from .env.production.local instead of silently rotating them. If GitHub already has a managed secret but this machine has lost its local value, it aborts rather than overwriting the production credential unknowingly.
+5. Writes real D1/R2 bindings and a CORS allowlist to apps/api/wrangler.toml.
+6. Sets GitHub Actions secrets with gh secret set via stdin, not command-line arguments, and creates/updates non-sensitive GitHub Actions variables.
+7. Writes ignored local-only .env.production.local and .env.render.local files with restrictive permissions; the Cloudflare API token is not written to disk.
+8. Applies remote D1 migrations and, with the :push variant, commits/pushes only apps/api/wrangler.toml to main.
+
+To deliberately rotate application secrets, use:
+
+```bash
+npm run bootstrap:production -- --rotate-secrets --push
+```
+
+The script asks you to type `ROTATE`. Rotating `AUTH_JWT_SECRET` invalidates existing login tokens. Rotating `RENDER_SERVICE_TOKEN` also requires copying the newly generated `.env.render.local` securely to the render host and recreating/restarting the render container. Keep a secure backup of `.env.production.local`; secrets cannot be read back from GitHub Actions.
 
 Required GitHub Actions secrets:
 - CLOUDFLARE_API_TOKEN
@@ -36,7 +45,7 @@ Required GitHub Actions secrets:
 - BOOTSTRAP_ADMIN_KEY
 - RENDER_SERVICE_TOKEN
 
-The Worker deploy workflow always builds and typechecks. It deploys only when all five secrets exist. After deployment, it sets AUTH_JWT_SECRET, BOOTSTRAP_ADMIN_KEY and RENDER_SERVICE_TOKEN inside Cloudflare Workers.
+The Worker deploy workflow always builds and typechecks. When the production secrets are present, it validates the live D1/R2 bindings and HTTPS frontend origins, applies any pending D1 migrations, deploys the Worker and configures AUTH_JWT_SECRET, BOOTSTRAP_ADMIN_KEY and RENDER_SERVICE_TOKEN inside Cloudflare Workers. The Pages workflow deploys only when all required frontend URL variables are also configured.
 
 The first Cloudflare API token must be created by an account admin in Cloudflare and entered in the hidden terminal prompt; source code cannot create its own initial credential. The script fails if that token lacks D1, R2 or Worker permissions.
 
