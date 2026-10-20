@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
-      CAN_DEPLOY: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
+      CAN_DEPLOY: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ACCOUNT_ID != '' && vars.VITE_API_BASE_URL != '' && vars.VITE_ADMIN_URL != '' && vars.VITE_STUDIO_URL != '' && vars.VITE_SITE_URL != '' }}
       VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
       VITE_ADMIN_URL: ${{ vars.VITE_ADMIN_URL }}
       VITE_STUDIO_URL: ${{ vars.VITE_STUDIO_URL }}
@@ -70,4 +70,4 @@ jobs:
         run: npx wrangler pages deploy apps/site/dist --project-name hendy-public-site --branch main --commit-hash "$GITHUB_SHA" --commit-message "$GITHUB_SHA"
       - name: Explain skipped deployment
         if: ${{ env.CAN_DEPLOY != 'true' }}
-        run: echo "::warning::Pages build succeeded but deployment was skipped. Run npm run bootstrap:production:push to provision Pages projects and Actions secrets/variables."
+        run: echo "::warning::Pages build succeeded but deployment was skipped. Run npm run bootstrap:production:push to provision Pages projects, secrets and required frontend URL variables."
