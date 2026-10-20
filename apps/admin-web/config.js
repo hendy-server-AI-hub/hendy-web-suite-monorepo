@@ -1,0 +1,1 @@
+window.HENDY_CONFIG = window.HENDY_CONFIG || { apiBaseUrl: "" };
