@@ -1,0 +1,26 @@
+services:
+  hendy-render-worker:
+    build:
+      context: ./services/render-worker
+      dockerfile: Dockerfile
+    image: hendy-render-worker:2.0.0
+    restart: unless-stopped
+    init: true
+    env_file:
+      - .env.render.local
+    environment:
+      HEALTH_PORT: "8787"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=1g
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 3g
+    cpus: 2.0
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
