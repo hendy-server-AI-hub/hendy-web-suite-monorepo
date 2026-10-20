@@ -318,10 +318,17 @@ async function main() {
   if (process.argv.includes("--push")) {
     const branch = command("git", ["branch", "--show-current"], { capture: true }).trim();
     if (branch !== "main") throw new Error("--push yêu cầu checkout nhánh main; hiện tại là " + (branch || "(detached HEAD)") + ".");
-    command("git", ["add", "apps/api/wrangler.toml"]);
-    command("git", ["commit", "-m", "chore: configure production Cloudflare bindings", "--", "apps/api/wrangler.toml"]);
-    command("git", ["push", "origin", "main"]);
-    console.log("✓ Đã commit/push wrangler.toml; GitHub Actions sẽ chạy deploy nếu secrets hợp lệ.");
+    const configStatus = command("git", ["status", "--porcelain", "--", "apps/api/wrangler.toml"], { capture: true }).trim();
+    if (configStatus) {
+      command("git", ["add", "apps/api/wrangler.toml"]);
+      command("git", ["commit", "-m", "chore: configure production Cloudflare bindings", "--", "apps/api/wrangler.toml"]);
+      command("git", ["push", "origin", "main"]);
+      console.log("✓ Đã commit/push wrangler.toml; GitHub Actions sẽ chạy deploy.");
+    } else {
+      // A secrets rotation may not change the config file, but the deployed Worker must still receive the new secrets.
+      command("gh", ["workflow", "run", "deploy-cloudflare.yml", "--repo", repo, "--ref", "main"]);
+      console.log("✓ Không có thay đổi wrangler.toml; đã kích hoạt workflow deploy để đồng bộ Worker secrets/migrations.");
+    }
   } else {
     console.log("Để tự commit/push file cấu hình và kích hoạt CI, chạy npm run bootstrap:production:push.");
     console.log("Hoặc kiểm tra rồi commit apps/api/wrangler.toml bằng tay.");
